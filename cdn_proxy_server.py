@@ -207,11 +207,12 @@ class CDNServer:
 
     async def _cache_response(self, url: str, body: bytes, headers, status: int) -> bool:
         directives = headers.get("Cache-Control", "").lower()
-        if status != 200 or len(body) > self.max_response_size:
+        if status != 200 or len(body) > min(self.max_response_size, self.max_cache_size):
             return False
         if any(token in directives for token in ("no-store", "private", "no-cache")):
             return False
-        if "*" in headers.get("Vary", "") or "set-cookie" in {k.lower() for k in headers}:
+        # Without varying the cache key on request headers, bypass all Vary responses.
+        if headers.get("Vary") or "set-cookie" in {k.lower() for k in headers}:
             return False
         ttl = self.cache_ttl
         for directive in directives.split(","):

@@ -33,7 +33,7 @@ HOP_BY_HOP = {
     "te", "trailer", "transfer-encoding", "upgrade", "content-length",
 }
 FORWARDED_HEADERS = {
-    "content-type", "content-encoding", "content-language", "cache-control",
+    "content-type", "content-language", "cache-control",
     "etag", "last-modified", "expires", "accept-ranges", "content-range",
 }
 SENSITIVE_CACHE_HEADERS = {"set-cookie", "www-authenticate"}
@@ -151,13 +151,17 @@ class CDNServer:
         return conn
 
     def _initialize_database(self) -> None:
-        with self._connect_db() as conn:
-            conn.execute("""CREATE TABLE IF NOT EXISTS requests (
-                id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, client_ip TEXT,
-                url_hash TEXT NOT NULL, cache_hit INTEGER NOT NULL,
-                response_size INTEGER NOT NULL, response_time REAL NOT NULL,
-                status_code INTEGER NOT NULL)""")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)")
+        conn = self._connect_db()
+        try:
+            with conn:
+                conn.execute("""CREATE TABLE IF NOT EXISTS requests (
+                    id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, client_ip TEXT,
+                    url_hash TEXT NOT NULL, cache_hit INTEGER NOT NULL,
+                    response_size INTEGER NOT NULL, response_time REAL NOT NULL,
+                    status_code INTEGER NOT NULL)""")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)")
+        finally:
+            conn.close()
 
     async def start(self, app: web.Application) -> None:
         connector = aiohttp.TCPConnector(
@@ -270,10 +274,14 @@ class CDNServer:
         record = (datetime.now(timezone.utc).isoformat(), client_ip, self.cache_key(url), int(hit), size, elapsed, status)
         async with self._db_lock:
             def insert():
-                with self._connect_db() as conn:
-                    conn.execute("""INSERT INTO requests
-                        (timestamp, client_ip, url_hash, cache_hit, response_size, response_time, status_code)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)""", record)
+                conn = self._connect_db()
+                try:
+                    with conn:
+                        conn.execute("""INSERT INTO requests
+                            (timestamp, client_ip, url_hash, cache_hit, response_size, response_time, status_code)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)""", record)
+                finally:
+                    conn.close()
             try:
                 await asyncio.to_thread(insert)
             except sqlite3.Error:

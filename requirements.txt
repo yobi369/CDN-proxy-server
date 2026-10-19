@@ -1,1 +1,2 @@
-aiohttp>=3.10,<4.0\naiofiles>=24.1,<26.0\n
+aiohttp>=3.10,<4.0
+aiofiles>=24.1,<26.0

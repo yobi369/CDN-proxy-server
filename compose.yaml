@@ -19,8 +19,7 @@ services:
     ports:
       - "${PORT:-8080}:8080"
     volumes:
-      - cdn-cache:/data/cache
-      - cdn-analytics:/data
+      - cdn-data:/data
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid
@@ -40,5 +39,4 @@ services:
       start_period: 10s
 
 volumes:
-  cdn-cache:
-  cdn-analytics:
+  cdn-data:

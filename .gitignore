@@ -1,0 +1,1 @@
+__pycache__/\n*.py[cod]\n.venv/\nvenv/\n.env\n.env.*\n!.env.example\ncache/\n*.db\n*.sqlite3\n.pytest_cache/\n.coverage\nhtmlcov/\n

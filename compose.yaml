@@ -1,0 +1,44 @@
+services:
+  cdn-proxy:
+    build: .
+    image: cdn-proxy-server:local
+    restart: unless-stopped
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      PROXY_API_KEY: ${PROXY_API_KEY:?Set PROXY_API_KEY in your .env file}
+      CACHE_DIR: /data/cache
+      ANALYTICS_DB: /data/analytics.db
+      MAX_CACHE_SIZE_BYTES: ${MAX_CACHE_SIZE_BYTES:-1073741824}
+      MAX_RESPONSE_SIZE_BYTES: ${MAX_RESPONSE_SIZE_BYTES:-26214400}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-3600}
+      UPSTREAM_TIMEOUT_SECONDS: ${UPSTREAM_TIMEOUT_SECONDS:-20}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - cdn-cache:/data/cache
+      - cdn-analytics:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  cdn-cache:
+  cdn-analytics:

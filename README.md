@@ -35,6 +35,18 @@ For remote access, generate a strong secret (for example, `python -c 'import sec
 
 See `.env.example`. Environment variables are read by the process; the app does not automatically parse `.env` files. Keep secrets out of source control.
 
+## Docker deployment
+
+Docker Compose runs the service as a non-root user, with a read-only container filesystem, dropped Linux capabilities, persistent storage, and a health check.
+
+1. Copy `.env.example` to `.env`.
+2. Set `PROXY_API_KEY` to a long random value. Do not commit `.env`.
+3. Start with `docker compose up --build -d`.
+4. Check liveness with `curl http://127.0.0.1:8080/health`.
+5. Send authenticated proxy requests with `Authorization: Bearer YOUR_KEY`.
+
+The compose file requires an API key and binds the service to all container interfaces; do not publish the port to untrusted networks without TLS termination and firewall rules.
+
 ## Tests
 
 ```bash

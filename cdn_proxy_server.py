@@ -292,15 +292,20 @@ class CDNServer:
             return False
 
     def _rate_limited(self, ip):
+        now = time.monotonic()
         if ip not in self.rate_events and len(self.rate_events) >= 10000:
-            for stale_ip in [key for key, queue in self.rate_events.items() if not queue]:
-                self.rate_events.pop(stale_ip, None)
+            for stale_ip, queue in list(self.rate_events.items()):
+                while queue and now - queue[0] >= 60:
+                    queue.popleft()
+                if not queue:
+                    self.rate_events.pop(stale_ip, None)
             if len(self.rate_events) >= 10000:
                 return True
-        now = time.monotonic()
         events = self.rate_events[ip]
-        while events and now - events[0] >= 60: events.popleft()
-        if len(events) >= Config.max_requests_per_minute: return True
+        while events and now - events[0] >= 60:
+            events.popleft()
+        if len(events) >= Config.max_requests_per_minute:
+            return True
         events.append(now)
         return False
 

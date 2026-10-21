@@ -130,8 +130,16 @@ def request_may_use_cache(request):
         "If-Match", "If-Unmodified-Since",
     )):
         return False
-    directives = request.headers.get("Cache-Control", "").lower()
-    return "no-cache" not in directives and "no-store" not in directives
+    directives = {}
+    for part in request.headers.get("Cache-Control", "").lower().split(","):
+        key, sep, value = part.strip().partition("=")
+        if key:
+            directives[key] = value.strip('"') if sep else None
+    if any(key in directives for key in ("no-cache", "no-store")):
+        return False
+    if directives.get("max-age") == "0":
+        return False
+    return "no-cache" not in request.headers.get("Pragma", "").lower()
 
 class AdaptivePolicy:
     """Explainable research baseline with bounded, configurable policy parameters."""

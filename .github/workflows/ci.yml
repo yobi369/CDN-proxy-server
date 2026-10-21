@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, engineering/adaptive-edge-v2, engineering/http-cache-semantics, engineering/streaming-edge, engineering/vary-aware-cache]
+    branches: [main, engineering/adaptive-edge-v2, engineering/http-cache-semantics, engineering/streaming-edge, engineering/vary-aware-cache, engineering/edge-intelligence-lab]
   pull_request:
   workflow_dispatch:
 
@@ -43,6 +43,10 @@ jobs:
         run: python experiments/evolutionary_policy_search.py --requests 500 --objects 25 --generations 2 --population 4 --seed 2026
       - name: Validate live load-test CLI
         run: python experiments/load_test.py --help
+      - name: Smoke-test swarm cache simulation
+        run: python experiments/swarm_cache_simulation.py --requests 500 --objects 25 --nodes 3 --sync-interval 25 --seed 2026
+      - name: Validate anomaly detector CLI
+        run: python experiments/anomaly_detector.py --help
       - name: Validate Docker image build
         run: docker build --tag cdn-proxy-server:test .
       - name: Validate Compose configuration

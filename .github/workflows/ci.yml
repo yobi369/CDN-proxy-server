@@ -47,6 +47,8 @@ jobs:
         run: python experiments/swarm_cache_simulation.py --requests 500 --objects 25 --nodes 3 --sync-interval 25 --seed 2026
       - name: Validate anomaly detector CLI
         run: python experiments/anomaly_detector.py --help
+      - name: Validate energy-budget estimator CLI
+        run: python experiments/energy_budget_simulation.py --help
       - name: Validate Docker image build
         run: docker build --tag cdn-proxy-server:test .
       - name: Validate Compose configuration

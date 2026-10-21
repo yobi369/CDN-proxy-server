@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-hostable HTTP caching proxy with a conservative adaptive policy."""
 from __future__ import annotations
-import asyncio, hashlib, hmac, ipaddress, json, logging, os, socket, sqlite3, time
+import asyncio, hashlib, hmac, ipaddress, json, logging, os, re, socket, sqlite3, time
 from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -122,14 +122,9 @@ class PublicOnlyResolver(aiohttp.abc.AbstractResolver):
     async def close(self):
         return None
 
-def request_may_use_cache(request):
-    """Avoid shared caching for personalized, conditional, range, or bypass requests."""
+def request_can_read_cache(request):
+    """Allow cache reads unless credentials or explicit request directives prohibit sharing."""
     if request.headers.get("Authorization") or request.headers.get("Cookie"):
-        return False
-    if any(request.headers.get(name) for name in (
-        "Range", "If-Range", "If-None-Match", "If-Modified-Since",
-        "If-Match", "If-Unmodified-Since",
-    )):
         return False
     directives = {}
     for part in request.headers.get("Cache-Control", "").lower().split(","):
@@ -141,6 +136,16 @@ def request_may_use_cache(request):
     if directives.get("max-age") == "0":
         return False
     return "no-cache" not in request.headers.get("Pragma", "").lower()
+
+
+def request_may_use_cache(request):
+    """Allow shared cache writes only for ordinary, non-conditional, non-range requests."""
+    if not request_can_read_cache(request):
+        return False
+    return not any(request.headers.get(name) for name in (
+        "Range", "If-Range", "If-None-Match", "If-Modified-Since",
+        "If-Match", "If-Unmodified-Since",
+    ))
 
 class AdaptivePolicy:
     """Explainable research baseline with bounded, configurable policy parameters."""
@@ -175,7 +180,7 @@ class CDNServer:
         self.cache_lock = asyncio.Lock()
         self.rate_events = defaultdict(deque)
         self.policy = AdaptivePolicy()
-        self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0, "revalidations": 0}
+        self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0, "revalidations": 0, "purges": 0}
         with sqlite3.connect(Config.db_path) as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS requests (
                 id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, client_ip TEXT,
@@ -231,12 +236,15 @@ class CDNServer:
             return None
 
     async def _delete_cache(self, target):
-        body_path, meta_path = self._paths(target)
-        for path in (body_path, meta_path):
-            try:
-                await asyncio.to_thread(path.unlink, missing_ok=True)
-            except OSError:
-                LOG.warning("Unable to remove stale cache entry %s", path.name)
+        async with self.cache_lock:
+            body_path, meta_path = self._paths(target)
+            existed = body_path.exists() or meta_path.exists()
+            for path in (body_path, meta_path):
+                try:
+                    await asyncio.to_thread(path.unlink, missing_ok=True)
+                except OSError:
+                    LOG.warning("Unable to remove cache entry %s", path.name)
+            return existed
 
     async def _write_cache(self, target, body, headers, ttl):
         if ttl <= 0 or len(body) > Config.max_object_bytes or len(body) > Config.max_cache_bytes:
@@ -374,6 +382,118 @@ class CDNServer:
             headers["Accept-Encoding"] = "identity"
         return headers
 
+    @staticmethod
+    def _header_value(headers, name):
+        return next((str(value) for key, value in headers.items() if key.lower() == name.lower()), None)
+
+    @staticmethod
+    def _parse_http_date(value):
+        if not value:
+            return None
+        try:
+            parsed = parsedate_to_datetime(value)
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def _etag_matches(condition, current, weak=True):
+        if not condition:
+            return False
+        tokens = re.findall(r'(?:W/)?"[^"]*"|\*', condition)
+        if "*" in tokens:
+            return True  # A cached representation exists.
+        if not current:
+            return False
+        def normalize(tag):
+            return tag[2:] if tag.startswith("W/") else tag
+        for tag in tokens:
+            if weak:
+                if normalize(tag) == normalize(current):
+                    return True
+            elif not tag.startswith("W/") and not current.startswith("W/") and tag == current:
+                return True
+        return False
+
+    def _if_range_matches(self, condition, etag, last_modified):
+        if not condition:
+            return True
+        if condition.startswith('"') or condition.startswith("W/"):
+            return self._etag_matches(condition, etag, weak=False)
+        requested_date = self._parse_http_date(condition)
+        modified_date = self._parse_http_date(last_modified)
+        return bool(requested_date and modified_date and modified_date <= requested_date)
+
+    def _cached_conditional_response(self, request, body, cached_headers):
+        """Serve supported HTTP preconditions and single byte ranges from a fresh cache entry.
+
+        Return None for unsupported/malformed range syntax so the origin handles it.
+        """
+        headers = dict(cached_headers)
+        etag = self._header_value(headers, "ETag")
+        last_modified = self._header_value(headers, "Last-Modified")
+        if_match = request.headers.get("If-Match")
+        if if_match and not self._etag_matches(if_match, etag, weak=False):
+            self._safe_headers(headers)
+            return web.Response(status=412, headers=headers)
+        if_unmodified = request.headers.get("If-Unmodified-Since")
+        if not if_match and if_unmodified and last_modified:
+            modified_date = self._parse_http_date(last_modified)
+            unmodified_date = self._parse_http_date(if_unmodified)
+            if modified_date and unmodified_date and modified_date > unmodified_date:
+                self._safe_headers(headers)
+                return web.Response(status=412, headers=headers)
+
+        if_none = request.headers.get("If-None-Match")
+        if if_none and self._etag_matches(if_none, etag, weak=True):
+            self._safe_headers(headers)
+            return web.Response(status=304, headers=headers)
+        if_modified = request.headers.get("If-Modified-Since")
+        if not if_none and if_modified and last_modified:
+            modified_date = self._parse_http_date(last_modified)
+            requested_date = self._parse_http_date(if_modified)
+            if modified_date and requested_date and modified_date <= requested_date:
+                self._safe_headers(headers)
+                return web.Response(status=304, headers=headers)
+
+        range_value = request.headers.get("Range")
+        if range_value:
+            if_range = request.headers.get("If-Range")
+            if if_range and not self._if_range_matches(if_range, etag, last_modified):
+                range_value = None  # If-Range mismatch requires a full representation.
+            else:
+                if "," in range_value:
+                    return None  # Multi-range responses are delegated to the origin.
+                match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_value.strip(), re.IGNORECASE)
+                if not match or (not match.group(1) and not match.group(2)):
+                    return None
+                first, last = match.groups()
+                length = len(body)
+                if not first:
+                    suffix = int(last)
+                    if suffix <= 0 or length == 0:
+                        headers["Content-Range"] = f"bytes */{length}"
+                        self._safe_headers(headers)
+                        return web.Response(status=416, headers=headers)
+                    start = max(0, length - suffix)
+                    end = length - 1
+                else:
+                    start = int(first)
+                    end = int(last) if last else length - 1
+                    if length == 0 or start >= length or start > end:
+                        headers["Content-Range"] = f"bytes */{length}"
+                        self._safe_headers(headers)
+                        return web.Response(status=416, headers=headers)
+                    end = min(end, length - 1)
+                headers["Content-Range"] = f"bytes {start}-{end}/{length}"
+                headers["Accept-Ranges"] = "bytes"
+                self._safe_headers(headers)
+                return web.Response(body=body[start:end + 1], status=206, headers=headers)
+
+        headers.setdefault("Accept-Ranges", "bytes")
+        self._safe_headers(headers)
+        return web.Response(body=body, headers=headers)
+
     async def handle_request(self, request):
         started = time.monotonic()
         ip = request.remote or "unknown"
@@ -384,16 +504,30 @@ class CDNServer:
         target = validate_target(request.query.get("url", ""), Config.allowed_hosts)
         host = urlsplit(target).hostname or ""
         cache_allowed = request_may_use_cache(request)
-        cached = await self._read_cache(target) if cache_allowed else None
+        cache_read_allowed = request_can_read_cache(request)
+        cached = await self._read_cache(target) if cache_read_allowed else None
         if cached:
             body, meta = cached
-            self.stats["hits"] += 1; self.stats["bytes_served"] += len(body)
-            self.policy.record(target, True)
-            headers = dict(meta.get("headers", {})); self._safe_headers(headers)
-            headers.update({"X-CDN-Cache": "HIT", "X-CDN-Server": "CDN-Proxy/2.0"})
-            elapsed = (time.monotonic() - started) * 1000
-            await self._log(ip, host, "HIT", len(body), elapsed)
-            return web.Response(body=body, headers=headers)
+            if cache_allowed:
+                self.stats["hits"] += 1; self.stats["bytes_served"] += len(body)
+                self.policy.record(target, True)
+                headers = dict(meta.get("headers", {})); self._safe_headers(headers)
+                headers.update({"X-CDN-Cache": "HIT", "X-CDN-Server": "CDN-Proxy/2.0"})
+                elapsed = (time.monotonic() - started) * 1000
+                await self._log(ip, host, "HIT", len(body), elapsed)
+                return web.Response(body=body, headers=headers)
+
+            cached_response = self._cached_conditional_response(request, body, meta.get("headers", {}))
+            if cached_response is not None:
+                served_bytes = len(cached_response.body or b"")
+                self.stats["hits"] += 1
+                self.stats["bytes_served"] += served_bytes
+                self.policy.record(target, True)
+                cached_response.headers["X-CDN-Cache"] = "HIT"
+                cached_response.headers["X-CDN-Server"] = "CDN-Proxy/2.0"
+                elapsed = (time.monotonic() - started) * 1000
+                await self._log(ip, host, f"HIT-{cached_response.status}", served_bytes, elapsed)
+                return cached_response
 
         conditional_names = {"if-none-match", "if-modified-since", "if-match", "if-unmodified-since", "if-range"}
         client_has_condition = any(name.lower() in conditional_names for name in request.headers)
@@ -479,6 +613,20 @@ class CDNServer:
             if name.lower() in blocked:
                 headers.pop(name, None)
 
+    async def purge_handler(self, request):
+        started = time.monotonic()
+        ip = request.remote or "unknown"
+        if self._rate_limited(ip):
+            raise web.HTTPTooManyRequests(text="Rate limit exceeded")
+        if not self._proxy_authorized(request):
+            raise web.HTTPUnauthorized(text="Cache purge requires X-Proxy-Token")
+        target = validate_target(request.query.get("url", ""), Config.allowed_hosts)
+        purged = await self._delete_cache(target)
+        self.stats["purges"] += int(purged)
+        elapsed = (time.monotonic() - started) * 1000
+        await self._log(ip, urlsplit(target).hostname or "", "PURGE" if purged else "PURGE-MISS", 0, elapsed)
+        return web.json_response({"purged": purged, "target_host": urlsplit(target).hostname})
+
     async def stats_handler(self, request):
         if not self._stats_authorized(request):
             raise web.HTTPUnauthorized(text="Stats require a configured bearer token")
@@ -498,6 +646,7 @@ def create_app():
     app["cdn_server"] = server
     app.router.add_get("/proxy", server.handle_request, allow_head=False)
     app.router.add_get("/stats", server.stats_handler)
+    app.router.add_delete("/cache", server.purge_handler)
     app.router.add_get("/health", server.health_handler)
     app.on_startup.append(server.start); app.on_cleanup.append(server.close)
     return app

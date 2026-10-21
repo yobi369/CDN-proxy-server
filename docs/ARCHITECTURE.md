@@ -24,6 +24,7 @@ flowchart TD
 - `tests/`: unit and storage regression tests.
 - `.github/workflows/ci.yml`: supported-Python test matrix, benchmark smoke test, and container build validation.
 - `Dockerfile` and `compose.yaml`: portable, non-root deployment with loopback-only host binding by default.
+- `DELETE /cache?url=...`: authenticated cache purge for one allowlisted origin URL.
 
 ## Important invariants
 
@@ -38,4 +39,4 @@ flowchart TD
 
 ## Current design limits
 
-This remains a single-process proxy. Rate limits, in-memory policy history, and counters are local to one process. The cache supports origin-side ETag/Last-Modified revalidation for expired entries, but does not yet implement full RFC cache validation, cached client-side conditional responses, range caching, purge APIs, streaming large bodies, or distributed coherence. Those are explicit engineering milestones rather than capabilities to imply prematurely.
+This remains a single-process proxy. Rate limits, in-memory policy history, and counters are local to one process. The cache supports origin-side ETag/Last-Modified revalidation for expired entries, but does not yet implement full RFC cache validation, full RFC conditional semantics, multi-range caching, purge APIs, streaming large bodies, or distributed coherence. Those are explicit engineering milestones rather than capabilities to imply prematurely.

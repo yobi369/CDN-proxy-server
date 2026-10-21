@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, engineering/adaptive-edge-v2]
+    branches: [main, engineering/adaptive-edge-v2, engineering/http-cache-semantics]
   pull_request:
   workflow_dispatch:
 

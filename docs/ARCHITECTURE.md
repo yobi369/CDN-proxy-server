@@ -24,6 +24,7 @@ flowchart TD
 - `tests/`: unit and storage regression tests.
 - `.github/workflows/ci.yml`: supported-Python test matrix, benchmark smoke test, and container build validation.
 - `Dockerfile` and `compose.yaml`: portable, non-root deployment with loopback-only host binding by default.
+- `DELETE /cache?url=...`: authenticated cache purge for one allowlisted origin URL.
 
 ## Important invariants
 

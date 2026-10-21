@@ -232,6 +232,14 @@ class CDNServer:
         match = re.match(r"^([0-9a-f]{64})(?:-[0-9a-f]{16})?$", meta_path.stem)
         return match.group(1) if match else None
 
+    def _unindex_cache_path(self, base_key, meta_path):
+        paths = self.cache_index.get(base_key)
+        if paths is None:
+            return
+        paths.discard(meta_path)
+        if not paths:
+            self.cache_index.pop(base_key, None)
+
     def _base_key(self, target):
         return hashlib.sha256(target.encode("utf-8")).hexdigest()
 
@@ -377,7 +385,7 @@ class CDNServer:
                         try:
                             await asyncio.to_thread(bp.unlink, missing_ok=True)
                             await asyncio.to_thread(mp.unlink, missing_ok=True)
-                            self.cache_index[base_key].discard(mp)
+                            self._unindex_cache_path(base_key, mp)
                             continue
                         except OSError:
                             LOG.warning("Unable to replace incompatible cache variant %s", mp.name)
@@ -404,7 +412,7 @@ class CDNServer:
                     await asyncio.to_thread(old_meta.unlink, missing_ok=True)
                     old_key = self._base_key_from_path(old_meta)
                     if old_key:
-                        self.cache_index[old_key].discard(old_meta)
+                        self._unindex_cache_path(old_key, old_meta)
                     size -= old_size
                 except OSError:
                     pass

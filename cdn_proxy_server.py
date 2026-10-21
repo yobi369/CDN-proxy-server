@@ -180,7 +180,7 @@ class CDNServer:
         self.cache_lock = asyncio.Lock()
         self.rate_events = defaultdict(deque)
         self.policy = AdaptivePolicy()
-        self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0, "revalidations": 0, "purges": 0}
+        self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0, "revalidations": 0, "purges": 0, "stream_errors": 0}
         with sqlite3.connect(Config.db_path) as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS requests (
                 id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, client_ip TEXT,
@@ -379,6 +379,7 @@ class CDNServer:
         headers.update({"X-CDN-Cache": "BYPASS", "X-CDN-Server": "CDN-Proxy/2.0"})
         response = web.StreamResponse(status=origin.status, headers=headers)
         total = 0
+        stream_error = False
         try:
             await response.prepare(request)
             for chunk in initial_chunks:
@@ -390,12 +391,19 @@ class CDNServer:
             await response.write_eof()
         except (ConnectionResetError, BrokenPipeError):
             LOG.debug("Client disconnected during streamed response from %s", host)
+            stream_error = True
+            response.force_close()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            LOG.warning("Origin stream failed for host %s: %s", host, type(exc).__name__)
+            stream_error = True
+            response.force_close()
         self.policy.record(target, False)
         self.stats["misses"] += 1
         self.stats["bypasses"] += 1
+        self.stats["stream_errors"] += int(stream_error)
         self.stats["bytes_served"] += total
         elapsed = (time.monotonic() - started) * 1000
-        await self._log(ip, host, "BYPASS", total, elapsed)
+        await self._log(ip, host, "STREAM-ERROR" if stream_error else "BYPASS", total, elapsed)
         return response
 
     @staticmethod

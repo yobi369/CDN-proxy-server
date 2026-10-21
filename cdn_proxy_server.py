@@ -134,9 +134,13 @@ def request_may_use_cache(request):
     return "no-cache" not in directives and "no-store" not in directives
 
 class AdaptivePolicy:
-    """Explainable research baseline with bounded per-object history."""
-    def __init__(self, max_keys: int = 10000):
+    """Explainable research baseline with bounded, configurable policy parameters."""
+    def __init__(self, max_keys: int = 10000, cold_ttl_fraction: float = 0.5,
+                 warm_hit_threshold: float = 0.6, min_observations: int = 3):
         self.max_keys = max(1, max_keys)
+        self.cold_ttl_fraction = min(1.0, max(0.05, float(cold_ttl_fraction)))
+        self.warm_hit_threshold = min(1.0, max(0.0, float(warm_hit_threshold)))
+        self.min_observations = max(1, int(min_observations))
         self.counts = OrderedDict()
 
     def record(self, key: str, hit: bool):
@@ -151,9 +155,9 @@ class AdaptivePolicy:
             return 0
         hits, misses = self.counts.get(key, (0, 0))
         total = hits + misses
-        if total >= 3 and hits / total >= 0.6:
+        if total >= self.min_observations and hits / total >= self.warm_hit_threshold:
             return origin_ttl
-        return max(1, min(origin_ttl, origin_ttl // 2 or 1))
+        return max(1, min(origin_ttl, int(origin_ttl * self.cold_ttl_fraction)))
 
 class CDNServer:
     def __init__(self):

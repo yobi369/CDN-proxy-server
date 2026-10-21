@@ -121,8 +121,13 @@ class PublicOnlyResolver(aiohttp.abc.AbstractResolver):
         return None
 
 def request_may_use_cache(request):
-    """Avoid shared caching for request-specific credentials or cache bypass directives."""
+    """Avoid shared caching for personalized, conditional, range, or bypass requests."""
     if request.headers.get("Authorization") or request.headers.get("Cookie"):
+        return False
+    if any(request.headers.get(name) for name in (
+        "Range", "If-Range", "If-None-Match", "If-Modified-Since",
+        "If-Match", "If-Unmodified-Since",
+    )):
         return False
     directives = request.headers.get("Cache-Control", "").lower()
     return "no-cache" not in directives and "no-store" not in directives

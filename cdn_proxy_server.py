@@ -368,6 +368,46 @@ class CDNServer:
             chunks.append(chunk)
         return b"".join(chunks)
 
+    async def _collect_cacheable_body(self, stream):
+        """Buffer a small response, or return a bounded prefix and iterator for streaming."""
+        iterator = stream.iter_chunked(64 * 1024).__aiter__()
+        chunks = []
+        total = 0
+        while True:
+            try:
+                chunk = await iterator.__anext__()
+            except StopAsyncIteration:
+                return b"".join(chunks), None
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > Config.max_object_bytes:
+                return None, (chunks, iterator)
+
+    async def _stream_bypass(self, request, origin, initial_chunks, iterator, ip, host, started):
+        headers = dict(origin.headers)
+        self._safe_headers(headers)
+        headers.update({"X-CDN-Cache": "BYPASS", "X-CDN-Server": "CDN-Proxy/2.0"})
+        response = web.StreamResponse(status=origin.status, headers=headers)
+        total = 0
+        try:
+            await response.prepare(request)
+            for chunk in initial_chunks:
+                await response.write(chunk)
+                total += len(chunk)
+            async for chunk in iterator:
+                await response.write(chunk)
+                total += len(chunk)
+            await response.write_eof()
+        except (ConnectionResetError, BrokenPipeError):
+            LOG.debug("Client disconnected during streamed response from %s", host)
+        self.policy.record(origin.url.human_repr() if hasattr(origin, "url") else host, False)
+        self.stats["misses"] += 1
+        self.stats["bypasses"] += 1
+        self.stats["bytes_served"] += total
+        elapsed = (time.monotonic() - started) * 1000
+        await self._log(ip, host, "BYPASS", total, elapsed)
+        return response
+
     @staticmethod
     def _origin_request_headers(request):
         # Forward only selected end-to-end headers; never forward Host or hop-by-hop fields.

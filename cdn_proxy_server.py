@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-hostable HTTP caching proxy with a conservative adaptive policy."""
 from __future__ import annotations
-import asyncio, hashlib, json, logging, os, sqlite3, time
+import asyncio, hashlib, ipaddress, json, logging, os, socket, sqlite3, time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,15 +53,17 @@ def validate_target(raw_url: str, allowed_hosts: frozenset[str]) -> str:
     return parsed.geturl()
 
 def cache_policy(headers: dict[str, str], default_ttl: int, max_ttl: int) -> int:
-    """Return TTL seconds; zero means do not store."""
+    """Return TTL seconds; zero means response is not safe to cache."""
+    lowered = {str(k).lower(): str(v) for k, v in headers.items()}
     directives = {}
-    for part in headers.get("Cache-Control", "").lower().split(","):
+    for part in lowered.get("cache-control", "").lower().split(","):
         key, sep, value = part.strip().partition("=")
         if key:
             directives[key] = value.strip('"') if sep else None
     if any(k in directives for k in ("no-store", "private", "no-cache")):
         return 0
-    if "Set-Cookie" in headers or "set-cookie" in headers:
+    if "set-cookie" in lowered or "vary" in lowered:
+        # Until Vary-aware cache keys are implemented, never cache variant responses.
         return 0
     raw = directives.get("s-maxage", directives.get("max-age"))
     try:
@@ -69,6 +71,34 @@ def cache_policy(headers: dict[str, str], default_ttl: int, max_ttl: int) -> int
     except (ValueError, TypeError):
         ttl = default_ttl
     return max(0, min(ttl, max_ttl))
+
+class PublicOnlyResolver(aiohttp.abc.AbstractResolver):
+    """Resolve hostnames once and reject non-global IPs to reduce SSRF/DNS-rebinding risk."""
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        loop = asyncio.get_running_loop()
+        records = await loop.getaddrinfo(host, port, family=family, type=socket.SOCK_STREAM)
+        resolved = []
+        for record_family, _, proto, _, sockaddr in records:
+            address = ipaddress.ip_address(sockaddr[0])
+            if not address.is_global:
+                raise OSError("Refusing to connect to a non-public IP address")
+            resolved.append({
+                "hostname": host, "host": sockaddr[0], "port": sockaddr[1],
+                "family": record_family, "proto": proto, "flags": socket.AI_NUMERICHOST,
+            })
+        if not resolved:
+            raise OSError("Hostname did not resolve to a public address")
+        return resolved
+
+    async def close(self):
+        return None
+
+def request_may_use_cache(request):
+    """Avoid shared caching for request-specific credentials or cache bypass directives."""
+    if request.headers.get("Authorization") or request.headers.get("Cookie"):
+        return False
+    directives = request.headers.get("Cache-Control", "").lower()
+    return "no-cache" not in directives and "no-store" not in directives
 
 class AdaptivePolicy:
     """Explainable research baseline: shorten TTL for cold objects, never extend origin TTL."""
@@ -100,7 +130,7 @@ class CDNServer:
 
     async def start(self, app):
         timeout = aiohttp.ClientTimeout(total=Config.timeout_seconds)
-        connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=60)
+        connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=60, resolver=PublicOnlyResolver())
         self.session = aiohttp.ClientSession(timeout=timeout, connector=connector,
             auto_decompress=False, headers={"User-Agent": "CDN-Proxy-Server/2.0"})
 
@@ -185,7 +215,7 @@ class CDNServer:
         if self._rate_limited(ip): raise web.HTTPTooManyRequests(text="Rate limit exceeded")
         target = validate_target(request.query.get("url", ""), Config.allowed_hosts)
         host = urlsplit(target).hostname or ""
-        cached = await self._read_cache(target)
+        cached = await self._read_cache(target) if request_may_use_cache(request) else None
         if cached:
             body, meta = cached
             self.stats["hits"] += 1; self.stats["bytes_served"] += len(body)
@@ -205,7 +235,9 @@ class CDNServer:
                 headers = dict(origin.headers)
                 ttl = cache_policy(headers, Config.default_ttl, Config.max_ttl)
                 adjusted = self.policy.adjust_ttl(target, ttl)
-                stored = origin.status == 200 and request.method == "GET" and await self._write_cache(target, body, headers, adjusted)
+                stored = (origin.status == 200 and request.method == "GET"
+                          and request_may_use_cache(request)
+                          and await self._write_cache(target, body, headers, adjusted))
                 self.policy.record(target, False)
                 status = "MISS" if stored else "BYPASS"
                 self.stats["misses"] += 1; self.stats["bypasses"] += int(not stored); self.stats["bytes_served"] += len(body)

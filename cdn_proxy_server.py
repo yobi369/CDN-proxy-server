@@ -156,7 +156,7 @@ class CDNServer:
         self.cache_lock = asyncio.Lock()
         self.rate_events = defaultdict(deque)
         self.policy = AdaptivePolicy()
-        self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0}
+        self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0, "revalidations": 0}
         with sqlite3.connect(Config.db_path) as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS requests (
                 id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, client_ip TEXT,
@@ -197,6 +197,27 @@ class CDNServer:
             return body, meta
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
             return None
+
+    async def _read_stale_cache(self, target):
+        """Read an expired but structurally valid entry for conditional revalidation."""
+        body_path, meta_path = self._paths(target)
+        try:
+            meta = json.loads(await asyncio.to_thread(meta_path.read_text, encoding="utf-8"))
+            age = time.time() - float(meta["stored_at"])
+            if age < 0 or int(meta["ttl"]) <= 0:
+                return None
+            body = await asyncio.to_thread(body_path.read_bytes)
+            return body, meta
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return None
+
+    async def _delete_cache(self, target):
+        body_path, meta_path = self._paths(target)
+        for path in (body_path, meta_path):
+            try:
+                await asyncio.to_thread(path.unlink, missing_ok=True)
+            except OSError:
+                LOG.warning("Unable to remove stale cache entry %s", path.name)
 
     async def _write_cache(self, target, body, headers, ttl):
         if ttl <= 0 or len(body) > Config.max_object_bytes or len(body) > Config.max_cache_bytes:
@@ -322,7 +343,8 @@ class CDNServer:
         if self._rate_limited(ip): raise web.HTTPTooManyRequests(text="Rate limit exceeded")
         target = validate_target(request.query.get("url", ""), Config.allowed_hosts)
         host = urlsplit(target).hostname or ""
-        cached = await self._read_cache(target) if request_may_use_cache(request) else None
+        cache_allowed = request_may_use_cache(request)
+        cached = await self._read_cache(target) if cache_allowed else None
         if cached:
             body, meta = cached
             self.stats["hits"] += 1; self.stats["bytes_served"] += len(body)
@@ -332,10 +354,46 @@ class CDNServer:
             elapsed = (time.monotonic() - started) * 1000
             self._log(ip, host, "HIT", len(body), elapsed)
             return web.Response(body=body, headers=headers)
+
+        conditional_names = {"if-none-match", "if-modified-since", "if-match", "if-unmodified-since", "if-range"}
+        client_has_condition = any(name.lower() in conditional_names for name in request.headers)
+        stale = await self._read_stale_cache(target) if cache_allowed and not client_has_condition else None
         if self.session is None: raise web.HTTPServiceUnavailable(text="Proxy is starting")
+        outbound_headers = self._origin_request_headers(request)
+        if stale:
+            old_headers = stale[1].get("headers", {})
+            etag = next((v for k, v in old_headers.items() if k.lower() == "etag"), None)
+            modified = next((v for k, v in old_headers.items() if k.lower() == "last-modified"), None)
+            if etag:
+                outbound_headers["If-None-Match"] = etag
+            elif modified:
+                outbound_headers["If-Modified-Since"] = modified
         try:
-            async with self.session.get(target, headers=self._origin_request_headers(request),
+            async with self.session.get(target, headers=outbound_headers,
                                         allow_redirects=False) as origin:
+                if origin.status == 304 and stale:
+                    body, old_meta = stale
+                    headers = dict(old_meta.get("headers", {}))
+                    self._merge_response_headers(headers, dict(origin.headers))
+                    if not any(k.lower() == "date" for k in origin.headers):
+                        headers["Date"] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
+                    if not any(k.lower() == "age" for k in origin.headers):
+                        headers["Age"] = "0"
+                    ttl = cache_policy(headers, Config.default_ttl, Config.max_ttl)
+                    adjusted = self.policy.adjust_ttl(target, ttl)
+                    stored = adjusted > 0 and await self._write_cache(target, body, headers, adjusted)
+                    if not stored:
+                        await self._delete_cache(target)
+                    self.policy.record(target, True)
+                    self.stats["hits"] += 1
+                    self.stats["revalidations"] += 1
+                    self.stats["bytes_served"] += len(body)
+                    self._safe_headers(headers)
+                    headers.update({"X-CDN-Cache": "REVALIDATED", "X-CDN-Server": "CDN-Proxy/2.0"})
+                    elapsed = (time.monotonic() - started) * 1000
+                    self._log(ip, host, "REVALIDATED", len(body), elapsed)
+                    return web.Response(body=body, status=200, headers=headers)
+
                 try:
                     body = await self._read_bounded_body(origin.content)
                 except web.HTTPBadGateway:
@@ -359,6 +417,14 @@ class CDNServer:
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             LOG.warning("Origin request failed for host %s: %s", host, type(exc).__name__)
             raise web.HTTPBadGateway(text="Origin request failed") from exc
+
+    @staticmethod
+    def _merge_response_headers(existing, updates):
+        for name, value in updates.items():
+            for old_name in list(existing):
+                if old_name.lower() == name.lower():
+                    existing.pop(old_name, None)
+            existing[name] = value
 
     @staticmethod
     def _safe_headers(headers):

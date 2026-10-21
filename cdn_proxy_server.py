@@ -2,7 +2,7 @@
 """Self-hostable HTTP caching proxy with a conservative adaptive policy."""
 from __future__ import annotations
 import asyncio, hashlib, ipaddress, json, logging, os, socket, sqlite3, time
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -128,17 +128,24 @@ def request_may_use_cache(request):
     return "no-cache" not in directives and "no-store" not in directives
 
 class AdaptivePolicy:
-    """Explainable research baseline: shorten TTL for cold objects, never extend origin TTL."""
-    def __init__(self):
-        self.hits = defaultdict(int)
-        self.misses = defaultdict(int)
+    """Explainable research baseline with bounded per-object history."""
+    def __init__(self, max_keys: int = 10000):
+        self.max_keys = max(1, max_keys)
+        self.counts = OrderedDict()
+
     def record(self, key: str, hit: bool):
-        (self.hits if hit else self.misses)[key] += 1
+        counts = self.counts.setdefault(key, [0, 0])  # [hits, misses]
+        counts[0 if hit else 1] += 1
+        self.counts.move_to_end(key)
+        while len(self.counts) > self.max_keys:
+            self.counts.popitem(last=False)
+
     def adjust_ttl(self, key: str, origin_ttl: int) -> int:
         if origin_ttl <= 0:
             return 0
-        total = self.hits[key] + self.misses[key]
-        if total >= 3 and self.hits[key] / total >= 0.6:
+        hits, misses = self.counts.get(key, (0, 0))
+        total = hits + misses
+        if total >= 3 and hits / total >= 0.6:
             return origin_ttl
         return max(1, min(origin_ttl, origin_ttl // 2 or 1))
 

@@ -61,6 +61,16 @@ The published port is bound to loopback only. Container deployments require both
 
 Stop the service with `docker compose down`. Named volumes persist until explicitly removed.
 
+## Cache operations
+
+A fresh cached GET can serve ETag/date preconditions and a single byte range without contacting the origin. Multi-range requests are passed through to the origin. Expired cache entries can be revalidated using origin ETag or Last-Modified validators.
+
+Purge one allowlisted URL from the local cache:
+
+    curl -X DELETE "http://127.0.0.1:8080/cache?url=https%3A%2F%2Fexample.com%2Fassets%2Fapp.js"
+
+When `PROXY_ACCESS_TOKEN` is configured (required for non-loopback binds and Docker Compose), include `-H "X-Proxy-Token: your-proxy-token"`. The purge endpoint uses the same destination allowlist as proxy requests and cannot purge arbitrary filesystem paths.
+
 ## Configuration
 
 | Variable | Default | Purpose |

@@ -70,6 +70,8 @@ async def run_load_test(proxy_url: str, target_url: str, requests: int = 100,
             started = time.perf_counter()
             try:
                 async with session.get(proxy_url, params={"url": target_url}, headers=headers) as response:
+                    statuses[str(response.status)] += 1
+                    cache_statuses[response.headers.get("X-CDN-Cache", "UNKNOWN")] += 1
                     size = 0
                     async for chunk in response.content.iter_chunked(64 * 1024):
                         size += len(chunk)
@@ -77,8 +79,6 @@ async def run_load_test(proxy_url: str, target_url: str, requests: int = 100,
                             errors["response_size_limit"] += 1
                             return
                     latencies.append((time.perf_counter() - started) * 1000)
-                    statuses[str(response.status)] += 1
-                    cache_statuses[response.headers.get("X-CDN-Cache", "UNKNOWN")] += 1
                     total_bytes += size
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 errors[type(exc).__name__] += 1
@@ -95,7 +95,8 @@ async def run_load_test(proxy_url: str, target_url: str, requests: int = 100,
         "requests_completed": successful,
         "concurrency": concurrency,
         "elapsed_seconds": round(elapsed, 3),
-        "throughput_requests_per_second": round(requests / elapsed, 3) if elapsed else 0.0,
+        "throughput_requests_per_second": round(successful / elapsed, 3) if elapsed else 0.0,
+        "offered_request_rate_per_second": round(requests / elapsed, 3) if elapsed else 0.0,
         "latency_ms": {
             "p50": round(statistics.median(latencies), 3) if latencies else 0.0,
             "p95": round(percentile(latencies, 0.95), 3),

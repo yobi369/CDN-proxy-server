@@ -180,7 +180,7 @@ class CDNServer:
         self.cache_lock = asyncio.Lock()
         self.rate_events = defaultdict(deque)
         self.policy = AdaptivePolicy()
-        self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0, "revalidations": 0}
+        self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0, "revalidations": 0, "purges": 0}
         with sqlite3.connect(Config.db_path) as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS requests (
                 id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, client_ip TEXT,
@@ -236,12 +236,15 @@ class CDNServer:
             return None
 
     async def _delete_cache(self, target):
-        body_path, meta_path = self._paths(target)
-        for path in (body_path, meta_path):
-            try:
-                await asyncio.to_thread(path.unlink, missing_ok=True)
-            except OSError:
-                LOG.warning("Unable to remove stale cache entry %s", path.name)
+        async with self.cache_lock:
+            body_path, meta_path = self._paths(target)
+            existed = body_path.exists() or meta_path.exists()
+            for path in (body_path, meta_path):
+                try:
+                    await asyncio.to_thread(path.unlink, missing_ok=True)
+                except OSError:
+                    LOG.warning("Unable to remove cache entry %s", path.name)
+            return existed
 
     async def _write_cache(self, target, body, headers, ttl):
         if ttl <= 0 or len(body) > Config.max_object_bytes or len(body) > Config.max_cache_bytes:

@@ -1,0 +1,35 @@
+services:
+  cdn-proxy:
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      # Loopback-only by default; add reviewed TLS/auth before remote access.
+      - "127.0.0.1:${PROXY_PORT:-8080}:8080"
+    environment:
+      CDN_ALLOWED_HOSTS: "${CDN_ALLOWED_HOSTS:?Set CDN_ALLOWED_HOSTS to exact authorized origin hostnames}"
+      PROXY_ACCESS_TOKEN: "${PROXY_ACCESS_TOKEN:?Set PROXY_ACCESS_TOKEN to a long random secret}"
+      PROXY_STATS_TOKEN: "${PROXY_STATS_TOKEN:?Set PROXY_STATS_TOKEN to a long random secret}"
+      PROXY_CACHE_DIR: /app/cache
+      PROXY_ANALYTICS_DB: /data/analytics.db
+      PROXY_MAX_CACHE_BYTES: "${PROXY_MAX_CACHE_BYTES:-268435456}"
+      PROXY_MAX_OBJECT_BYTES: "${PROXY_MAX_OBJECT_BYTES:-8388608}"
+      PROXY_DEFAULT_TTL: "${PROXY_DEFAULT_TTL:-300}"
+      PROXY_MAX_TTL: "${PROXY_MAX_TTL:-86400}"
+      PROXY_TIMEOUT_SECONDS: "${PROXY_TIMEOUT_SECONDS:-15}"
+      PROXY_RATE_LIMIT: "${PROXY_RATE_LIMIT:-120}"
+      PROXY_LOG_CLIENT_IP: "${PROXY_LOG_CLIENT_IP:-false}"
+    volumes:
+      - proxy-cache:/app/cache
+      - proxy-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  proxy-cache:
+  proxy-data:

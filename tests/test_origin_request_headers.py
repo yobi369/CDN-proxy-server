@@ -6,7 +6,8 @@ class OriginRequestHeaderTests(unittest.TestCase):
     def test_forwards_selected_headers_without_host_or_hop_by_hop(self):
         request = type("Request", (), {"headers": {
             "Accept": "text/css",
-            "Authorization": "Bearer token",
+            "Authorization": "Bearer origin-token",
+            "X-Proxy-Token": "proxy-secret",
             "Cookie": "session=value",
             "Host": "attacker.invalid",
             "Connection": "keep-alive",
@@ -14,7 +15,8 @@ class OriginRequestHeaderTests(unittest.TestCase):
         }})()
         headers = CDNServer._origin_request_headers(request)
         self.assertEqual(headers["Accept"], "text/css")
-        self.assertEqual(headers["Authorization"], "Bearer token")
+        self.assertEqual(headers["Authorization"], "Bearer origin-token")
+        self.assertNotIn("X-Proxy-Token", headers)
         self.assertEqual(headers["Cookie"], "session=value")
         self.assertNotIn("Host", headers)
         self.assertNotIn("Connection", headers)

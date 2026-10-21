@@ -54,9 +54,10 @@ Then build and start:
 
     docker compose up --build -d
     curl http://127.0.0.1:8080/health
+    curl -H "X-Proxy-Token: replace-with-a-different-long-random-secret" "http://127.0.0.1:8080/proxy?url=https%3A%2F%2Fexample.com%2F"
     docker compose logs -f cdn-proxy
 
-The published port is bound to loopback only. The container runs as a non-root user, drops Linux capabilities, uses a read-only root filesystem, and stores cache/database data in named volumes. Do not change the port binding to a public interface until TLS, client authentication, firewall policy, and deployment-specific egress controls have been configured and tested.
+The published port is bound to loopback only. Container deployments require both `PROXY_ACCESS_TOKEN` (sent as `X-Proxy-Token` to `/proxy`) and `PROXY_STATS_TOKEN` (sent as a bearer token to `/stats`). Use different random secrets. The container runs as a non-root user, drops Linux capabilities, uses a read-only root filesystem, and stores cache/database data in named volumes. Do not change the port binding to a public interface until TLS, client authentication, firewall policy, and deployment-specific egress controls have been configured and tested.
 
 Stop the service with `docker compose down`. Named volumes persist until explicitly removed.
 

@@ -131,7 +131,7 @@ GitHub Actions runs the tests on pushes and pull requests. GitHub is used for so
 
 - Single-process prototype, not a globally distributed CDN.
 - No TLS termination, user accounts, purge API, distributed rate limiting, or multi-node cache coherence.
-- Cached GETs support common ETag/date preconditions and single byte ranges; multi-range requests are delegated to the origin. Full RFC 9111 cache semantics and multi-range caching still need more implementation and tests before production use. Supported Vary fields (Accept, Accept-Language, Accept-Encoding, User-Agent, and Origin) are included in cache variant keys; Vary: * and unsupported Vary fields are never cached. Large origin responses are streamed without caching when they exceed the configured object limit. Expired cached objects can be conditionally revalidated with origin ETag/Last-Modified validators.
+- Cached GETs support common ETag/date preconditions and single byte ranges; multi-range requests are delegated to the origin. Full RFC 9111 cache semantics and multi-range caching still need more implementation and tests before production use. Supported Vary fields (Accept, Accept-Language, Accept-Encoding, User-Agent, and Origin) are included in cache variant keys; their values are hashed in metadata. Vary: * and unsupported Vary fields are never cached. Large origin responses are streamed without caching when they exceed the configured object limit. Expired cached objects can be conditionally revalidated with origin ETag/Last-Modified validators.
 - Review deployment topology and outbound firewall rules before allowing access beyond localhost.
 
 ## License

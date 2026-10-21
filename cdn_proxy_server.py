@@ -195,6 +195,8 @@ class CDNServer:
         Config.cache_dir.mkdir(parents=True, exist_ok=True)
         self.session = None
         self.cache_lock = asyncio.Lock()
+        self.cache_index = defaultdict(set)
+        self._load_cache_index()
         self.rate_events = defaultdict(deque)
         self.policy = AdaptivePolicy()
         self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0, "revalidations": 0, "purges": 0, "stream_errors": 0}
@@ -213,6 +215,22 @@ class CDNServer:
     async def close(self, app):
         if self.session:
             await self.session.close()
+
+    def _load_cache_index(self):
+        """Build an in-memory target-to-variant index once at startup."""
+        for meta_path in Config.cache_dir.glob("*.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                meta = {}
+            base_key = meta.get("target_key") or self._base_key_from_path(meta_path)
+            if base_key:
+                self.cache_index[base_key].add(meta_path)
+
+    @staticmethod
+    def _base_key_from_path(meta_path):
+        match = re.match(r"^([0-9a-f]{64})(?:-[0-9a-f]{16})?$", meta_path.stem)
+        return match.group(1) if match else None
 
     def _base_key(self, target):
         return hashlib.sha256(target.encode("utf-8")).hexdigest()

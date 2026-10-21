@@ -300,16 +300,29 @@ class CDNServer:
                     LOG.warning("Unable to remove cache entry %s", path.name)
             return existed
 
-    async def _write_cache(self, target, body, headers, ttl):
-        if ttl <= 0 or len(body) > Config.max_object_bytes or len(body) > Config.max_cache_bytes:
+    async def _write_cache(self, target, body, headers, ttl, request_headers=None):
+        if (ttl <= 0 or len(body) > Config.max_object_bytes
+                or len(body) > Config.max_cache_bytes or parse_vary_fields(headers) is None):
             return False
         async with self.cache_lock:
-            return await self._write_cache_locked(target, body, headers, ttl)
+            return await self._write_cache_locked(target, body, headers, ttl, request_headers)
 
-    async def _write_cache_locked(self, target, body, headers, ttl):
-        body_path, meta_path = self._paths(target)
+    async def _write_cache_locked(self, target, body, headers, ttl, request_headers=None):
+        variant = self._variant_info(target, headers, request_headers)
+        if variant is None:
+            return False
+        base_key, variant_id, vary_fields, vary_values = variant
+        body_path, meta_path = self._paths(target, variant_id)
         stored_at = time.time()
-        meta = {"stored_at": stored_at, "ttl": ttl, "size": len(body), "headers": headers}
+        meta = {
+            "target_key": base_key,
+            "vary": vary_fields,
+            "vary_values": vary_values,
+            "stored_at": stored_at,
+            "ttl": ttl,
+            "size": len(body),
+            "headers": headers,
+        }
         meta_bytes = json.dumps(meta, separators=(",", ":")).encode("utf-8")
         new_size = len(body) + len(meta_bytes)
         if new_size > Config.max_cache_bytes:
@@ -324,23 +337,36 @@ class CDNServer:
                     body_size = bp.stat().st_size if bp.exists() else 0
                     if mp == meta_path:
                         continue
-                    size += meta_size + body_size
                     try:
                         old_meta = json.loads(await asyncio.to_thread(mp.read_text, encoding="utf-8"))
                         stored = float(old_meta.get("stored_at", 0))
                     except (OSError, ValueError, TypeError):
-                        stored = 0
+                        old_meta, stored = {}, 0
+
+                    is_same_target = mp.stem == base_key or mp.stem.startswith(base_key + "-")
+                    old_fields = sorted(old_meta.get("vary", []))
+                    incompatible_variant = is_same_target and (
+                        old_fields != vary_fields or not vary_fields
+                    )
+                    if incompatible_variant:
+                        try:
+                            await asyncio.to_thread(bp.unlink, missing_ok=True)
+                            await asyncio.to_thread(mp.unlink, missing_ok=True)
+                            continue
+                        except OSError:
+                            LOG.warning("Unable to replace incompatible cache variant %s", mp.name)
+
+                    size += meta_size + body_size
                     entries.append((stored, mp, bp, meta_size + body_size))
                 except OSError:
                     continue
 
-            # Remove orphaned body files so abandoned writes do not consume the budget forever.
             known_bodies = {entry[2].name for entry in entries}
             known_bodies.add(body_path.name)
             for orphan in Config.cache_dir.glob("*.body"):
                 if orphan.name not in known_bodies:
                     try:
-                        orphan.unlink()
+                        await asyncio.to_thread(orphan.unlink, missing_ok=True)
                     except OSError:
                         pass
 
@@ -348,8 +374,8 @@ class CDNServer:
                 if size + new_size <= Config.max_cache_bytes:
                     break
                 try:
-                    old_body.unlink(missing_ok=True)
-                    old_meta.unlink(missing_ok=True)
+                    await asyncio.to_thread(old_body.unlink, missing_ok=True)
+                    await asyncio.to_thread(old_meta.unlink, missing_ok=True)
                     size -= old_size
                 except OSError:
                     pass

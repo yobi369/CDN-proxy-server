@@ -20,6 +20,8 @@ def validate_urls(proxy_url: str, target_url: str, token: str | None) -> None:
     target = urlsplit(target_url)
     if proxy.scheme not in ("http", "https") or not proxy.hostname:
         raise ValueError("proxy-url must be an absolute HTTP(S) URL")
+    if proxy.username is not None or proxy.password is not None:
+        raise ValueError("proxy-url must not contain credentials")
     if target.scheme not in ("http", "https") or not target.hostname:
         raise ValueError("target-url must be an absolute HTTP(S) URL")
     if target.username is not None or target.password is not None:
@@ -31,6 +33,8 @@ def validate_urls(proxy_url: str, target_url: str, token: str | None) -> None:
         loopback = proxy_host == "localhost"
     if not loopback and not token:
         raise ValueError("a proxy access token is required for non-loopback proxy URLs")
+    if not loopback and proxy.scheme != "https":
+        raise ValueError("non-loopback proxy URLs must use HTTPS to protect the access token")
 
 
 def percentile(values: list[float], p: float) -> float:

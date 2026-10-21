@@ -45,7 +45,7 @@ The target hostname must exactly match an entry in CDN_ALLOWED_HOSTS. Never put 
 
 ## Docker deployment
 
-Docker Engine with the Compose plugin is required. Create a local `.env` file (do not commit it):
+Docker Engine with the Compose plugin is required. Copy `.env.example` to `.env` and replace the example hostnames and secret (never commit `.env`):
 
     CDN_ALLOWED_HOSTS=example.com,www.example.com
     PROXY_STATS_TOKEN=replace-with-a-long-random-secret

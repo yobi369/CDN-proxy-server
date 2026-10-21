@@ -38,6 +38,26 @@ class CacheStorageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_oversized_object_is_not_cached(self):
         self.assertFalse(await self.server._write_cache("https://example.com/large", b"x" * 101, {}, 60))
+    async def test_vary_variants_are_isolated_and_purge_together(self):
+        old_budget = Config.max_cache_bytes
+        Config.max_cache_bytes = 10000
+        try:
+            target = "https://example.com/localized"
+            headers = {"Cache-Control": "max-age=60", "Vary": "Accept-Language"}
+            self.assertTrue(await self.server._write_cache(target, b"hello-en", headers, 60, {"Accept-Language": "en"}))
+            self.assertTrue(await self.server._write_cache(target, b"bonjour-fr", headers, 60, {"Accept-Language": "fr"}))
+            english = await self.server._read_cache(target, {"Accept-Language": "en"})
+            french = await self.server._read_cache(target, {"Accept-Language": "fr"})
+            absent = await self.server._read_cache(target, {"Accept-Language": "de"})
+            self.assertEqual(english[0], b"hello-en")
+            self.assertEqual(french[0], b"bonjour-fr")
+            self.assertIsNone(absent)
+            self.assertTrue(await self.server._delete_cache(target))
+            self.assertIsNone(await self.server._read_cache(target, {"Accept-Language": "en"}))
+            self.assertIsNone(await self.server._read_cache(target, {"Accept-Language": "fr"}))
+        finally:
+            Config.max_cache_bytes = old_budget
+
     async def test_expired_entry_can_be_loaded_for_revalidation(self):
         target = "https://example.com/revalidate"
         self.assertTrue(await self.server._write_cache(target, b"cached", {"ETag": '"v1"'}, 1))

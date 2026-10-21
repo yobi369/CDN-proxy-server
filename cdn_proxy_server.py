@@ -379,6 +379,118 @@ class CDNServer:
             headers["Accept-Encoding"] = "identity"
         return headers
 
+    @staticmethod
+    def _header_value(headers, name):
+        return next((str(value) for key, value in headers.items() if key.lower() == name.lower()), None)
+
+    @staticmethod
+    def _parse_http_date(value):
+        if not value:
+            return None
+        try:
+            parsed = parsedate_to_datetime(value)
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @staticmethod
+    def _etag_matches(condition, current, weak=True):
+        if not condition:
+            return False
+        tokens = re.findall(r'(?:W/)?"[^"]*"|\\*', condition)
+        if "*" in tokens:
+            return True  # A cached representation exists.
+        if not current:
+            return False
+        def normalize(tag):
+            return tag[2:] if tag.startswith("W/") else tag
+        for tag in tokens:
+            if weak:
+                if normalize(tag) == normalize(current):
+                    return True
+            elif not tag.startswith("W/") and not current.startswith("W/") and tag == current:
+                return True
+        return False
+
+    def _if_range_matches(self, condition, etag, last_modified):
+        if not condition:
+            return True
+        if condition.startswith('"') or condition.startswith("W/"):
+            return self._etag_matches(condition, etag, weak=False)
+        requested_date = self._parse_http_date(condition)
+        modified_date = self._parse_http_date(last_modified)
+        return bool(requested_date and modified_date and modified_date <= requested_date)
+
+    def _cached_conditional_response(self, request, body, cached_headers):
+        """Serve supported HTTP preconditions and single byte ranges from a fresh cache entry.
+
+        Return None for unsupported/malformed range syntax so the origin handles it.
+        """
+        headers = dict(cached_headers)
+        etag = self._header_value(headers, "ETag")
+        last_modified = self._header_value(headers, "Last-Modified")
+        if_match = request.headers.get("If-Match")
+        if if_match and not self._etag_matches(if_match, etag, weak=False):
+            self._safe_headers(headers)
+            return web.Response(status=412, headers=headers)
+        if_unmodified = request.headers.get("If-Unmodified-Since")
+        if not if_match and if_unmodified and last_modified:
+            modified_date = self._parse_http_date(last_modified)
+            unmodified_date = self._parse_http_date(if_unmodified)
+            if modified_date and unmodified_date and modified_date > unmodified_date:
+                self._safe_headers(headers)
+                return web.Response(status=412, headers=headers)
+
+        if_none = request.headers.get("If-None-Match")
+        if if_none and self._etag_matches(if_none, etag, weak=True):
+            self._safe_headers(headers)
+            return web.Response(status=304, headers=headers)
+        if_modified = request.headers.get("If-Modified-Since")
+        if not if_none and if_modified and last_modified:
+            modified_date = self._parse_http_date(last_modified)
+            requested_date = self._parse_http_date(if_modified)
+            if modified_date and requested_date and modified_date <= requested_date:
+                self._safe_headers(headers)
+                return web.Response(status=304, headers=headers)
+
+        range_value = request.headers.get("Range")
+        if range_value:
+            if_range = request.headers.get("If-Range")
+            if if_range and not self._if_range_matches(if_range, etag, last_modified):
+                range_value = None  # If-Range mismatch requires a full representation.
+            else:
+                if "," in range_value:
+                    return None  # Multi-range responses are delegated to the origin.
+                match = re.fullmatch(r"bytes=(\\d*)-(\\d*)", range_value.strip(), re.IGNORECASE)
+                if not match or (not match.group(1) and not match.group(2)):
+                    return None
+                first, last = match.groups()
+                length = len(body)
+                if not first:
+                    suffix = int(last)
+                    if suffix <= 0 or length == 0:
+                        headers["Content-Range"] = f"bytes */{length}"
+                        self._safe_headers(headers)
+                        return web.Response(status=416, headers=headers)
+                    start = max(0, length - suffix)
+                    end = length - 1
+                else:
+                    start = int(first)
+                    end = int(last) if last else length - 1
+                    if length == 0 or start >= length or start > end:
+                        headers["Content-Range"] = f"bytes */{length}"
+                        self._safe_headers(headers)
+                        return web.Response(status=416, headers=headers)
+                    end = min(end, length - 1)
+                headers["Content-Range"] = f"bytes {start}-{end}/{length}"
+                headers["Accept-Ranges"] = "bytes"
+                self._safe_headers(headers)
+                return web.Response(body=body[start:end + 1], status=206, headers=headers)
+
+        headers.setdefault("Accept-Ranges", "bytes")
+        self._safe_headers(headers)
+        return web.Response(body=body, headers=headers)
+
     async def handle_request(self, request):
         started = time.monotonic()
         ip = request.remote or "unknown"

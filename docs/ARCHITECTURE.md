@@ -21,6 +21,11 @@ flowchart TD
 
 - `cdn_proxy_server.py`: HTTP endpoints, target validation, outbound client lifecycle, cache storage, request limiting, analytics, and the conservative adaptive policy.
 - `experiments/cache_policy_benchmark.py`: deterministic synthetic comparison of fixed TTL and adaptive TTL.
+- `experiments/evolutionary_policy_search.py`: seeded, bounded search for adaptive policy parameters; outputs candidates but never deploys them.
+- `experiments/energy_budget_simulation.py`: energy estimate using a synthetic workload and user-supplied measured per-request energy values.
+- `experiments/swarm_cache_simulation.py`: synthetic multi-node cache-demand hint experiment without payload sharing.
+- `experiments/anomaly_detector.py`: robust outlier analysis over SQLite telemetry without reporting client IPs or full URLs.
+- `experiments/load_test.py`: bounded live load test for an explicitly configured proxy endpoint.
 - `tests/`: unit and storage regression tests.
 - `.github/workflows/ci.yml`: supported-Python test matrix, benchmark smoke test, and container build validation.
 - `Dockerfile` and `compose.yaml`: portable, non-root deployment with loopback-only host binding by default.

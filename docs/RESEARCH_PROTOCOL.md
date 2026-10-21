@@ -14,6 +14,15 @@ Every candidate must be compared with at least:
 
 ## Synthetic benchmark
 
+Run the decentralized hint experiment:
+
+```bash
+python experiments/swarm_cache_simulation.py --requests 10000 --objects 100 --nodes 4 --sync-interval 100 --seed 2026
+```
+
+This compares independent fixed-TTL caches with cooperative aggregate-demand hints. It models control-plane overhead and never exchanges response payloads. It is a synthetic simulation, not evidence that real multi-node deployments will improve performance.
+
+
 Run:
 
 ```bash
@@ -46,3 +55,18 @@ An experimental policy may adjust only explicitly bounded performance parameters
 ## Reporting format
 
 Each experiment report should include the hypothesis, baseline, workload, hardware/runtime details, parameter values, number of repetitions, raw result artifact, summary statistics, limitations, and a clear statement of whether results are synthetic or measured.
+
+
+## Energy-budget experiment
+
+`experiments/energy_budget_simulation.py` estimates fixed/adaptive cache energy under a synthetic workload using measured inputs supplied by the operator:
+
+```bash
+python experiments/energy_budget_simulation.py \
+  --energy-budget-mwh "$MEASURED_BUDGET_MWH" \
+  --measured-harvested-energy-mwh "$MEASURED_HARVEST_MWH" \
+  --cache-hit-energy-mwh "$MEASURED_CACHE_HIT_MWH" \
+  --origin-miss-energy-mwh "$MEASURED_ORIGIN_MISS_MWH"
+```
+
+Measure these values with calibrated instrumentation on the actual device. Include idle power, conversion/storage losses, and uncertainty in the measured inputs if they are relevant. The script does not estimate energy from ambient RF strength and does not prove that harvested energy can power a workload.

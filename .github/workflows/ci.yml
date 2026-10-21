@@ -35,3 +35,5 @@ jobs:
         run: python -m compileall -q cdn_proxy_server.py tests
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
+      - name: Smoke-test synthetic benchmark
+        run: python experiments/cache_policy_benchmark.py --requests 1000 --objects 25 --seed 2026

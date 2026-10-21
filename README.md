@@ -99,6 +99,7 @@ Evaluate experiments against a fixed baseline with reproducible workloads, warm-
     pip install -r requirements-dev.txt
     python -m unittest discover -s tests -v
     python experiments/cache_policy_benchmark.py --requests 10000 --objects 100 --seed 2026
+    python experiments/evolutionary_policy_search.py --requests 3000 --objects 80 --generations 8 --population 12 --seed 2026
 
 The benchmark uses a deterministic synthetic Zipf-like workload and illustrative latency assumptions. Its output is **simulation, not a production performance claim**. Use representative traffic and measured origin/cache latency before selecting a policy.
 

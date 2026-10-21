@@ -39,6 +39,8 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Smoke-test synthetic benchmark
         run: python experiments/cache_policy_benchmark.py --requests 1000 --objects 25 --seed 2026
+      - name: Smoke-test evolutionary policy search
+        run: python experiments/evolutionary_policy_search.py --requests 500 --objects 25 --generations 2 --population 4 --seed 2026
       - name: Validate Docker image build
         run: docker build --tag cdn-proxy-server:test .
       - name: Validate Compose configuration

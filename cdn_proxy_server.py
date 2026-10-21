@@ -322,12 +322,17 @@ class CDNServer:
         events.append(now)
         return False
 
-    def _log(self, ip, host, status, size, elapsed_ms):
+    async def _log(self, ip, host, status, size, elapsed_ms):
+        await asyncio.to_thread(self._log_sync, ip, host, status, size, elapsed_ms)
+
+    @staticmethod
+    def _log_sync(ip, host, status, size, elapsed_ms):
         try:
             with sqlite3.connect(Config.db_path, timeout=2) as conn:
                 conn.execute("INSERT INTO requests(timestamp,client_ip,target_host,cache_status,response_size,response_time_ms) VALUES(?,?,?,?,?,?)",
                     (datetime.now(timezone.utc).isoformat(), ip, host, status, size, elapsed_ms))
-        except sqlite3.Error: LOG.exception("Analytics write failed")
+        except sqlite3.Error:
+            LOG.exception("Analytics write failed")
 
     def _proxy_authorized(self, request):
         if Config.access_token:
@@ -384,7 +389,7 @@ class CDNServer:
             headers = dict(meta.get("headers", {})); self._safe_headers(headers)
             headers.update({"X-CDN-Cache": "HIT", "X-CDN-Server": "CDN-Proxy/2.0"})
             elapsed = (time.monotonic() - started) * 1000
-            self._log(ip, host, "HIT", len(body), elapsed)
+            await self._log(ip, host, "HIT", len(body), elapsed)
             return web.Response(body=body, headers=headers)
 
         conditional_names = {"if-none-match", "if-modified-since", "if-match", "if-unmodified-since", "if-range"}
@@ -423,7 +428,7 @@ class CDNServer:
                     self._safe_headers(headers)
                     headers.update({"X-CDN-Cache": "REVALIDATED", "X-CDN-Server": "CDN-Proxy/2.0"})
                     elapsed = (time.monotonic() - started) * 1000
-                    self._log(ip, host, "REVALIDATED", len(body), elapsed)
+                    await self._log(ip, host, "REVALIDATED", len(body), elapsed)
                     return web.Response(body=body, status=200, headers=headers)
 
                 try:
@@ -443,7 +448,7 @@ class CDNServer:
                 self._safe_headers(headers)
                 headers.update({"X-CDN-Cache": status, "X-CDN-Server": "CDN-Proxy/2.0"})
                 elapsed = (time.monotonic() - started) * 1000
-                self._log(ip, host, status, len(body), elapsed)
+                await self._log(ip, host, status, len(body), elapsed)
                 return web.Response(body=body, status=origin.status, headers=headers)
         except web.HTTPException: raise
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:

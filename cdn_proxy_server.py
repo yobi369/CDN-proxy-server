@@ -613,6 +613,20 @@ class CDNServer:
             if name.lower() in blocked:
                 headers.pop(name, None)
 
+    async def purge_handler(self, request):
+        started = time.monotonic()
+        ip = request.remote or "unknown"
+        if self._rate_limited(ip):
+            raise web.HTTPTooManyRequests(text="Rate limit exceeded")
+        if not self._proxy_authorized(request):
+            raise web.HTTPUnauthorized(text="Cache purge requires X-Proxy-Token")
+        target = validate_target(request.query.get("url", ""), Config.allowed_hosts)
+        purged = await self._delete_cache(target)
+        self.stats["purges"] += int(purged)
+        elapsed = (time.monotonic() - started) * 1000
+        await self._log(ip, urlsplit(target).hostname or "", "PURGE" if purged else "PURGE-MISS", 0, elapsed)
+        return web.json_response({"purged": purged, "target_host": urlsplit(target).hostname})
+
     async def stats_handler(self, request):
         if not self._stats_authorized(request):
             raise web.HTTPUnauthorized(text="Stats require a configured bearer token")
@@ -632,6 +646,7 @@ def create_app():
     app["cdn_server"] = server
     app.router.add_get("/proxy", server.handle_request, allow_head=False)
     app.router.add_get("/stats", server.stats_handler)
+    app.router.add_delete("/cache", server.purge_handler)
     app.router.add_get("/health", server.health_handler)
     app.on_startup.append(server.start); app.on_cleanup.append(server.close)
     return app

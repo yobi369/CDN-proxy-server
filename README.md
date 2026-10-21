@@ -43,6 +43,23 @@ Try it:
 
 The target hostname must exactly match an entry in CDN_ALLOWED_HOSTS. Never put secrets in URLs.
 
+## Docker deployment
+
+Docker Engine with the Compose plugin is required. Create a local `.env` file (do not commit it):
+
+    CDN_ALLOWED_HOSTS=example.com,www.example.com
+    PROXY_STATS_TOKEN=replace-with-a-long-random-secret
+
+Then build and start:
+
+    docker compose up --build -d
+    curl http://127.0.0.1:8080/health
+    docker compose logs -f cdn-proxy
+
+The published port is bound to loopback only. The container runs as a non-root user, drops Linux capabilities, uses a read-only root filesystem, and stores cache/database data in named volumes. Do not change the port binding to a public interface until TLS, client authentication, firewall policy, and deployment-specific egress controls have been configured and tested.
+
+Stop the service with `docker compose down`. Named volumes persist until explicitly removed.
+
 ## Configuration
 
 | Variable | Default | Purpose |

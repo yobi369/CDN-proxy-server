@@ -11,6 +11,7 @@ This project is an origin-allowlisted caching proxy prototype. It is not intende
 - Use distinct long, random `PROXY_ACCESS_TOKEN` and `PROXY_STATS_TOKEN` values in container/non-loopback deployments; the proxy access token is sent in `X-Proxy-Token` and is not forwarded to the origin. Never commit secrets.
 - Retain outbound firewall rules that block private, loopback, link-local, metadata-service, and other non-public destinations.
 - Keep the runtime non-root and restrict filesystem access.
+- Client IPs are not persisted in analytics by default; enable `PROXY_LOG_CLIENT_IP` only if your operational and privacy requirements justify it.
 - Do not cache authenticated/cookie-bearing requests or responses that set cookies or use `Vary` until complete variant-aware caching is implemented.
 - Treat the adaptive policy as untrusted experimental logic. It must not modify destination allowlists, authentication, or resource ceilings.
 

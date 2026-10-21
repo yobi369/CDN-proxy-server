@@ -12,7 +12,7 @@ This project is an origin-allowlisted caching proxy prototype. It is not intende
 - Retain outbound firewall rules that block private, loopback, link-local, metadata-service, and other non-public destinations.
 - Keep the runtime non-root and restrict filesystem access.
 - Client IPs are not persisted in analytics by default; enable `PROXY_LOG_CLIENT_IP` only if your operational and privacy requirements justify it.
-- Never cache authenticated/cookie-bearing requests or responses that set cookies. Ordinary `Vary` fields are keyed by request-header values; `Vary: *` is never cached. Review origin-specific variant behavior before production use.
+- Never cache authenticated/cookie-bearing requests or responses that set cookies. Supported `Vary` fields (`Accept`, `Accept-Language`, `Accept-Encoding`, `User-Agent`, `Origin`) are keyed by request-header values; `Vary: *` and unsupported fields are never cached. Review origin-specific variant behavior before production use.
 - Treat the adaptive policy as untrusted experimental logic. It must not modify destination allowlists, authentication, or resource ceilings.
 
 ## Reporting a vulnerability

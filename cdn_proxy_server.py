@@ -708,7 +708,7 @@ class CDNServer:
                     )
                 stored = (origin.status == 200 and request.method == "GET"
                           and request_may_use_cache(request)
-                          and await self._write_cache(target, body, headers, adjusted))
+                          and await self._write_cache(target, body, headers, adjusted, request.headers))
                 self.policy.record(target, False)
                 status = "MISS" if stored else "BYPASS"
                 self.stats["misses"] += 1

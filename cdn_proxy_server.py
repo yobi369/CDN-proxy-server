@@ -375,11 +375,12 @@ class CDNServer:
         return headers
 
     async def handle_request(self, request):
-        if not self._proxy_authorized(request):
-            raise web.HTTPUnauthorized(text="Proxy access requires X-Proxy-Token")
         started = time.monotonic()
         ip = request.remote or "unknown"
-        if self._rate_limited(ip): raise web.HTTPTooManyRequests(text="Rate limit exceeded")
+        if self._rate_limited(ip):
+            raise web.HTTPTooManyRequests(text="Rate limit exceeded")
+        if not self._proxy_authorized(request):
+            raise web.HTTPUnauthorized(text="Proxy access requires X-Proxy-Token")
         target = validate_target(request.query.get("url", ""), Config.allowed_hosts)
         host = urlsplit(target).hostname or ""
         cache_allowed = request_may_use_cache(request)

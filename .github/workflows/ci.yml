@@ -31,8 +31,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+      - name: Static checks
+        run: ruff check --select F cdn_proxy_server.py experiments tests
       - name: Compile source
-        run: python -m compileall -q cdn_proxy_server.py tests
+        run: python -m compileall -q cdn_proxy_server.py experiments tests
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
       - name: Smoke-test synthetic benchmark

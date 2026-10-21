@@ -76,6 +76,7 @@ Stop the service with `docker compose down`. Named volumes persist until explici
 | PROXY_MAX_TTL | 86400 | Maximum cache TTL |
 | PROXY_TIMEOUT_SECONDS | 15 | Origin request timeout |
 | PROXY_RATE_LIMIT | 120 | Requests/minute per observed client IP |
+| PROXY_LOG_CLIENT_IP | false | Persist client IP in SQLite analytics only when explicitly enabled |
 | PROXY_ACCESS_TOKEN | empty | Token for /proxy when configured; mandatory for non-loopback binds, sent as X-Proxy-Token |
 | PROXY_STATS_TOKEN | empty | Bearer token for /stats |
 

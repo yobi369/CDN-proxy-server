@@ -1,6 +1,18 @@
 import unittest
 from aiohttp import web
-from cdn_proxy_server import AdaptivePolicy, cache_policy, request_may_use_cache, validate_target
+from cdn_proxy_server import AdaptivePolicy, cache_policy, is_public_ip, request_may_use_cache, validate_target
+
+class PublicAddressTests(unittest.TestCase):
+    def test_public_ipv4_is_allowed(self):
+        self.assertTrue(is_public_ip("8.8.8.8"))
+    def test_loopback_is_rejected(self):
+        self.assertFalse(is_public_ip("127.0.0.1"))
+    def test_link_local_metadata_range_is_rejected(self):
+        self.assertFalse(is_public_ip("169.254.169.254"))
+    def test_ipv6_loopback_is_rejected(self):
+        self.assertFalse(is_public_ip("::1"))
+    def test_invalid_ip_is_rejected(self):
+        self.assertFalse(is_public_ip("not-an-ip"))
 
 class TargetValidationTests(unittest.TestCase):
     def setUp(self):

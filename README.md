@@ -122,6 +122,8 @@ The tool reports p50/p95/p99 latency, throughput, HTTP status counts, cache-stat
     python -m unittest discover -s tests -v
     python experiments/cache_policy_benchmark.py --requests 10000 --objects 100 --seed 2026
     python experiments/evolutionary_policy_search.py --requests 3000 --objects 80 --generations 8 --population 12 --seed 2026
+    python experiments/swarm_cache_simulation.py --requests 10000 --objects 100 --nodes 4 --sync-interval 100 --seed 2026
+    python experiments/anomaly_detector.py --db analytics.db --limit 5000
 
 The benchmark uses a deterministic synthetic Zipf-like workload and illustrative latency assumptions. Its output is **simulation, not a production performance claim**. Use representative traffic and measured origin/cache latency before selecting a policy.
 

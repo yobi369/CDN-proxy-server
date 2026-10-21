@@ -1,4 +1,6 @@
+import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -36,6 +38,17 @@ class CacheStorageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_oversized_object_is_not_cached(self):
         self.assertFalse(await self.server._write_cache("https://example.com/large", b"x" * 101, {}, 60))
+    async def test_expired_entry_can_be_loaded_for_revalidation(self):
+        target = "https://example.com/revalidate"
+        self.assertTrue(await self.server._write_cache(target, b"cached", {"ETag": '"v1"'}, 1))
+        _, meta_path = self.server._paths(target)
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["stored_at"] = time.time() - 10
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        self.assertIsNone(await self.server._read_cache(target))
+        stale = await self.server._read_stale_cache(target)
+        self.assertIsNotNone(stale)
+        self.assertEqual(stale[0], b"cached")
 
 
 if __name__ == "__main__":

@@ -105,6 +105,17 @@ Research directions:
 
 Evaluate experiments against a fixed baseline with reproducible workloads, warm-up periods, repeated runs, and metrics such as hit ratio, p50/p95 latency, origin bytes avoided, resource use, and error rate. A policy must never weaken SSRF protections, authorization, cache privacy, or resource limits. Do not describe simulations as production results.
 
+## Live performance test
+
+After starting the proxy and configuring an allowlisted origin, measure the running service:
+
+    PROXY_ACCESS_TOKEN=your-proxy-token python experiments/load_test.py \
+      --proxy-url http://127.0.0.1:8080/proxy \
+      --target-url "https://example.com/assets/app.js" \
+      --requests 100 --concurrency 10
+
+The tool reports p50/p95/p99 latency, throughput, HTTP status counts, cache-status counts, errors, and response bytes. It is intentionally bounded to 10,000 requests and concurrency 100. Only test infrastructure and origin URLs you control or are authorized to load-test. Remote proxy endpoints require HTTPS and a proxy access token. Run warm-cache and cold-cache trials separately, repeat runs, and record network/origin conditions before comparing results.
+
 ## Development and tests
 
     pip install -r requirements-dev.txt

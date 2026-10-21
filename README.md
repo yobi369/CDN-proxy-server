@@ -15,7 +15,7 @@ A self-hostable Python HTTP caching proxy that combines conventional proxy engin
 
 **This is not an open proxy.** Configure CDN_ALLOWED_HOSTS with exact hostnames you control or are authorized to proxy. Other hosts are rejected. Redirect following is disabled so an allowed origin cannot redirect the proxy to another destination.
 
-The service binds to 127.0.0.1 by default. Do not expose it directly to the public internet without an authentication layer, TLS termination, firewall/rate-limit review, and operational monitoring. The /stats endpoint requires PROXY_STATS_TOKEN; if no token is configured, stats access stays disabled.
+The service binds to 127.0.0.1 by default. Do not expose it directly to the public internet without an authentication layer, TLS termination, firewall/rate-limit review, and operational monitoring. The /stats endpoint requires PROXY_STATS_TOKEN; if no token is configured, stats access stays disabled. The /proxy endpoint requires PROXY_ACCESS_TOKEN when configured and refuses tokenless operation on non-loopback binds.
 
 The host allowlist is a strong first boundary, not a substitute for deployment network controls. For sensitive environments, restrict outbound network traffic at the host/container firewall too.
 
@@ -76,6 +76,7 @@ Stop the service with `docker compose down`. Named volumes persist until explici
 | PROXY_MAX_TTL | 86400 | Maximum cache TTL |
 | PROXY_TIMEOUT_SECONDS | 15 | Origin request timeout |
 | PROXY_RATE_LIMIT | 120 | Requests/minute per observed client IP |
+| PROXY_ACCESS_TOKEN | empty | Token for /proxy when configured; mandatory for non-loopback binds, sent as X-Proxy-Token |
 | PROXY_STATS_TOKEN | empty | Bearer token for /stats |
 
 Rate limiting and statistics are process-local, not distributed multi-node coordination.

@@ -50,8 +50,12 @@ class CachePolicyTests(unittest.TestCase):
         self.assertEqual(cache_policy({"Cache-Control": "no-cache"}, 300, 3600), 0)
     def test_set_cookie(self):
         self.assertEqual(cache_policy({"Set-Cookie": "session=abc"}, 300, 3600), 0)
-    def test_vary_response_is_not_cached_without_vary_aware_key(self):
-        self.assertEqual(cache_policy({"Vary": "Accept-Language", "Cache-Control": "max-age=60"}, 300, 3600), 0)
+    def test_vary_response_can_be_cached_with_vary_aware_key(self):
+        self.assertEqual(cache_policy({"Vary": "Accept-Language", "Cache-Control": "max-age=60"}, 300, 3600), 60)
+    def test_vary_wildcard_is_not_cached(self):
+        self.assertEqual(cache_policy({"Vary": "*", "Cache-Control": "max-age=60"}, 300, 3600), 0)
+    def test_vary_on_unforwarded_header_is_not_cached(self):
+        self.assertEqual(cache_policy({"Vary": "X-API-Key", "Cache-Control": "max-age=60"}, 300, 3600), 0)
     def test_lowercase_set_cookie_is_not_cached(self):
         self.assertEqual(cache_policy({"set-cookie": "session=abc"}, 300, 3600), 0)
     def test_caps_ttl(self):

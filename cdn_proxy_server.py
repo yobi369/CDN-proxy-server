@@ -56,6 +56,24 @@ def validate_target(raw_url: str, allowed_hosts: frozenset[str]) -> str:
         raise web.HTTPForbidden(text="Target host is not in CDN_ALLOWED_HOSTS")
     return parsed.geturl()
 
+VARY_CACHE_ALLOWLIST = frozenset({"accept", "accept-language", "accept-encoding", "user-agent", "origin"})
+
+
+def parse_vary_fields(headers):
+    """Return normalized Vary fields, or None for wildcard/invalid directives."""
+    lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+    raw = lowered.get("vary", "").strip()
+    if not raw:
+        return []
+    if raw == "*":
+        return None
+    fields = sorted({field.strip().lower() for field in raw.split(",") if field.strip()})
+    if not fields or any(not re.fullmatch(r"[!#$%&'*+.^_`|~0-9a-z-]+", field) for field in fields):
+        return None
+    if any(field not in VARY_CACHE_ALLOWLIST for field in fields):
+        return None
+    return fields
+
 def cache_policy(headers: dict[str, str], default_ttl: int, max_ttl: int) -> int:
     """Return remaining freshness seconds; zero means response is not safe to cache."""
     lowered = {str(k).lower(): str(v) for k, v in headers.items()}
@@ -68,8 +86,7 @@ def cache_policy(headers: dict[str, str], default_ttl: int, max_ttl: int) -> int
         return 0
     if "no-cache" in lowered.get("pragma", "").lower():
         return 0
-    if "set-cookie" in lowered or "vary" in lowered:
-        # Until Vary-aware cache keys are implemented, never cache variant responses.
+    if "set-cookie" in lowered or parse_vary_fields(lowered) is None:
         return 0
 
     raw = directives.get("s-maxage", directives.get("max-age"))
@@ -178,6 +195,8 @@ class CDNServer:
         Config.cache_dir.mkdir(parents=True, exist_ok=True)
         self.session = None
         self.cache_lock = asyncio.Lock()
+        self.cache_index = defaultdict(set)
+        self._load_cache_index()
         self.rate_events = defaultdict(deque)
         self.policy = AdaptivePolicy()
         self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0, "revalidations": 0, "purges": 0, "stream_errors": 0}
@@ -197,9 +216,59 @@ class CDNServer:
         if self.session:
             await self.session.close()
 
-    def _paths(self, target):
-        key = hashlib.sha256(target.encode("utf-8")).hexdigest()
-        return Config.cache_dir / f"{key}.body", Config.cache_dir / f"{key}.json"
+    def _load_cache_index(self):
+        """Build an in-memory target-to-variant index from filenames at startup."""
+        for meta_path in Config.cache_dir.glob("*.json"):
+            base_key = self._base_key_from_path(meta_path)
+            if base_key:
+                self.cache_index[base_key].add(meta_path)
+
+    @staticmethod
+    def _base_key_from_path(meta_path):
+        match = re.match(r"^([0-9a-f]{64})(?:-[0-9a-f]{16})?$", meta_path.stem)
+        return match.group(1) if match else None
+
+    def _unindex_cache_path(self, base_key, meta_path):
+        paths = self.cache_index.get(base_key)
+        if paths is None:
+            return
+        paths.discard(meta_path)
+        if not paths:
+            self.cache_index.pop(base_key, None)
+
+    def _base_key(self, target):
+        return hashlib.sha256(target.encode("utf-8")).hexdigest()
+
+    def _paths(self, target, variant_id="default"):
+        key = self._base_key(target)
+        stem = key if variant_id == "default" else f"{key}-{variant_id}"
+        return Config.cache_dir / f"{stem}.body", Config.cache_dir / f"{stem}.json"
+
+    @staticmethod
+    def _request_header_values(request_headers):
+        values = {}
+        for name, value in (request_headers or {}).items():
+            key = str(name).lower()
+            value = str(value)
+            values[key] = f"{values[key]}, {value}" if key in values else value
+        return values
+
+    def _variant_info(self, target, response_headers, request_headers):
+        fields = parse_vary_fields(response_headers)
+        if fields is None:
+            return None
+        request_values = self._request_header_values(request_headers)
+        # Persist only hashes of variant header values, never raw request headers.
+        vary_values = {
+            field: hashlib.sha256(request_values.get(field, "").encode("utf-8")).hexdigest()
+            for field in fields
+        }
+        if not fields:
+            variant_id = "default"
+        else:
+            signature = json.dumps(vary_values, sort_keys=True, separators=(",", ":"))
+            variant_id = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]
+        return self._base_key(target), variant_id, fields, vary_values
 
     def _cache_size(self):
         total = 0
@@ -211,51 +280,91 @@ class CDNServer:
         except OSError: pass
         return total
 
-    async def _read_cache(self, target):
-        body_path, meta_path = self._paths(target)
-        try:
-            meta = json.loads(await asyncio.to_thread(meta_path.read_text, encoding="utf-8"))
-            age = time.time() - float(meta["stored_at"])
-            if age < 0 or age >= int(meta["ttl"]): return None
-            body = await asyncio.to_thread(body_path.read_bytes)
-            return body, meta
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-            return None
+    async def _find_cache_entry(self, target, request_headers, fresh_only):
+        # Serialize reads with writes and purge to avoid observing half-replaced entries.
+        async with self.cache_lock:
+            return await self._find_cache_entry_locked(target, request_headers, fresh_only)
 
-    async def _read_stale_cache(self, target):
-        """Read an expired but structurally valid entry for conditional revalidation."""
-        body_path, meta_path = self._paths(target)
-        try:
-            meta = json.loads(await asyncio.to_thread(meta_path.read_text, encoding="utf-8"))
-            age = time.time() - float(meta["stored_at"])
-            if age < 0 or int(meta["ttl"]) <= 0:
-                return None
-            body = await asyncio.to_thread(body_path.read_bytes)
-            return body, meta
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-            return None
+    async def _find_cache_entry_locked(self, target, request_headers, fresh_only):
+        base_key = self._base_key(target)
+        request_values = self._request_header_values(request_headers)
+        for meta_path in tuple(self.cache_index.get(base_key, ())):
+            if not (meta_path.stem == base_key or meta_path.stem.startswith(base_key + "-")):
+                continue
+            try:
+                meta = json.loads(await asyncio.to_thread(meta_path.read_text, encoding="utf-8"))
+                stored_key = meta.get("target_key", base_key if meta_path.stem == base_key else None)
+                if stored_key != base_key:
+                    continue
+                fields = meta.get("vary", [])
+                values = meta.get("vary_values", {})
+                if any(
+                    hashlib.sha256(request_values.get(field, "").encode("utf-8")).hexdigest()
+                    != values.get(field, "")
+                    for field in fields
+                ):
+                    continue
+                age = time.time() - float(meta["stored_at"])
+                ttl = int(meta["ttl"])
+                if age < 0 or ttl <= 0:
+                    continue
+                if fresh_only and age >= ttl:
+                    continue
+                if not fresh_only and age < ttl:
+                    continue
+                body = await asyncio.to_thread(meta_path.with_suffix(".body").read_bytes)
+                return body, meta
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                continue
+        return None
+
+    async def _read_cache(self, target, request_headers=None):
+        return await self._find_cache_entry(target, request_headers, fresh_only=True)
+
+    async def _read_stale_cache(self, target, request_headers=None):
+        """Read a matching expired variant for conditional revalidation."""
+        return await self._find_cache_entry(target, request_headers, fresh_only=False)
 
     async def _delete_cache(self, target):
         async with self.cache_lock:
-            body_path, meta_path = self._paths(target)
-            existed = body_path.exists() or meta_path.exists()
-            for path in (body_path, meta_path):
+            base_key = self._base_key(target)
+            meta_paths = set(self.cache_index.get(base_key, ()))
+            meta_paths.update(Config.cache_dir.glob(f"{base_key}*.json"))
+            body_paths = set(Config.cache_dir.glob(f"{base_key}*.body"))
+            temp_paths = set(Config.cache_dir.glob(f"{base_key}*.tmp"))
+            paths = list(meta_paths | body_paths | temp_paths)
+            existed = any(path.exists() for path in paths)
+            for path in paths:
                 try:
                     await asyncio.to_thread(path.unlink, missing_ok=True)
                 except OSError:
                     LOG.warning("Unable to remove cache entry %s", path.name)
+            self.cache_index.pop(base_key, None)
             return existed
 
-    async def _write_cache(self, target, body, headers, ttl):
-        if ttl <= 0 or len(body) > Config.max_object_bytes or len(body) > Config.max_cache_bytes:
+    async def _write_cache(self, target, body, headers, ttl, request_headers=None):
+        if (ttl <= 0 or len(body) > Config.max_object_bytes
+                or len(body) > Config.max_cache_bytes or parse_vary_fields(headers) is None):
             return False
         async with self.cache_lock:
-            return await self._write_cache_locked(target, body, headers, ttl)
+            return await self._write_cache_locked(target, body, headers, ttl, request_headers)
 
-    async def _write_cache_locked(self, target, body, headers, ttl):
-        body_path, meta_path = self._paths(target)
+    async def _write_cache_locked(self, target, body, headers, ttl, request_headers=None):
+        variant = self._variant_info(target, headers, request_headers)
+        if variant is None:
+            return False
+        base_key, variant_id, vary_fields, vary_values = variant
+        body_path, meta_path = self._paths(target, variant_id)
         stored_at = time.time()
-        meta = {"stored_at": stored_at, "ttl": ttl, "size": len(body), "headers": headers}
+        meta = {
+            "target_key": base_key,
+            "vary": vary_fields,
+            "vary_values": vary_values,
+            "stored_at": stored_at,
+            "ttl": ttl,
+            "size": len(body),
+            "headers": headers,
+        }
         meta_bytes = json.dumps(meta, separators=(",", ":")).encode("utf-8")
         new_size = len(body) + len(meta_bytes)
         if new_size > Config.max_cache_bytes:
@@ -270,23 +379,37 @@ class CDNServer:
                     body_size = bp.stat().st_size if bp.exists() else 0
                     if mp == meta_path:
                         continue
-                    size += meta_size + body_size
                     try:
                         old_meta = json.loads(await asyncio.to_thread(mp.read_text, encoding="utf-8"))
                         stored = float(old_meta.get("stored_at", 0))
                     except (OSError, ValueError, TypeError):
-                        stored = 0
+                        old_meta, stored = {}, 0
+
+                    is_same_target = mp.stem == base_key or mp.stem.startswith(base_key + "-")
+                    old_fields = sorted(old_meta.get("vary", []))
+                    incompatible_variant = is_same_target and (
+                        old_fields != vary_fields or not vary_fields
+                    )
+                    if incompatible_variant:
+                        try:
+                            await asyncio.to_thread(bp.unlink, missing_ok=True)
+                            await asyncio.to_thread(mp.unlink, missing_ok=True)
+                            self._unindex_cache_path(base_key, mp)
+                            continue
+                        except OSError:
+                            LOG.warning("Unable to replace incompatible cache variant %s", mp.name)
+
+                    size += meta_size + body_size
                     entries.append((stored, mp, bp, meta_size + body_size))
                 except OSError:
                     continue
 
-            # Remove orphaned body files so abandoned writes do not consume the budget forever.
             known_bodies = {entry[2].name for entry in entries}
             known_bodies.add(body_path.name)
             for orphan in Config.cache_dir.glob("*.body"):
                 if orphan.name not in known_bodies:
                     try:
-                        orphan.unlink()
+                        await asyncio.to_thread(orphan.unlink, missing_ok=True)
                     except OSError:
                         pass
 
@@ -294,8 +417,11 @@ class CDNServer:
                 if size + new_size <= Config.max_cache_bytes:
                     break
                 try:
-                    old_body.unlink(missing_ok=True)
-                    old_meta.unlink(missing_ok=True)
+                    await asyncio.to_thread(old_body.unlink, missing_ok=True)
+                    await asyncio.to_thread(old_meta.unlink, missing_ok=True)
+                    old_key = self._base_key_from_path(old_meta)
+                    if old_key:
+                        self._unindex_cache_path(old_key, old_meta)
                     size -= old_size
                 except OSError:
                     pass
@@ -308,6 +434,7 @@ class CDNServer:
             await asyncio.to_thread(meta_tmp.write_bytes, meta_bytes)
             await asyncio.to_thread(body_tmp.replace, body_path)
             await asyncio.to_thread(meta_tmp.replace, meta_path)
+            self.cache_index[base_key].add(meta_path)
             return True
         except OSError:
             LOG.exception("Cache write failed")
@@ -410,7 +537,7 @@ class CDNServer:
     def _origin_request_headers(request):
         # Forward only selected end-to-end headers; never forward Host or hop-by-hop fields.
         allowed = {
-            "accept", "accept-language", "accept-encoding", "authorization", "cookie",
+            "accept", "accept-language", "accept-encoding", "origin", "authorization", "cookie",
             "if-none-match", "if-modified-since", "if-match", "if-unmodified-since",
             "if-range", "range", "cache-control", "pragma", "user-agent",
         }
@@ -543,7 +670,7 @@ class CDNServer:
         host = urlsplit(target).hostname or ""
         cache_allowed = request_may_use_cache(request)
         cache_read_allowed = request_can_read_cache(request)
-        cached = await self._read_cache(target) if cache_read_allowed else None
+        cached = await self._read_cache(target, request.headers) if cache_read_allowed else None
         if cached:
             body, meta = cached
             if cache_allowed:
@@ -569,7 +696,7 @@ class CDNServer:
 
         conditional_names = {"if-none-match", "if-modified-since", "if-match", "if-unmodified-since", "if-range"}
         client_has_condition = any(name.lower() in conditional_names for name in request.headers)
-        stale = await self._read_stale_cache(target) if cache_allowed and not client_has_condition else None
+        stale = await self._read_stale_cache(target, request.headers) if cache_allowed and not client_has_condition else None
         if self.session is None: raise web.HTTPServiceUnavailable(text="Proxy is starting")
         outbound_headers = self._origin_request_headers(request)
         if stale:
@@ -593,7 +720,7 @@ class CDNServer:
                         headers["Age"] = "0"
                     ttl = cache_policy(headers, Config.default_ttl, Config.max_ttl)
                     adjusted = self.policy.adjust_ttl(target, ttl)
-                    stored = adjusted > 0 and await self._write_cache(target, body, headers, adjusted)
+                    stored = adjusted > 0 and await self._write_cache(target, body, headers, adjusted, request.headers)
                     if not stored:
                         await self._delete_cache(target)
                     self.policy.record(target, True)
@@ -628,7 +755,7 @@ class CDNServer:
                     )
                 stored = (origin.status == 200 and request.method == "GET"
                           and request_may_use_cache(request)
-                          and await self._write_cache(target, body, headers, adjusted))
+                          and await self._write_cache(target, body, headers, adjusted, request.headers))
                 self.policy.record(target, False)
                 status = "MISS" if stored else "BYPASS"
                 self.stats["misses"] += 1

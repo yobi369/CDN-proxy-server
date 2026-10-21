@@ -76,6 +76,17 @@ class StreamingResponseTests(unittest.IsolatedAsyncioTestCase):
         body = await response.read()
         return response, body
 
+    async def test_small_response_is_buffered_and_cached(self):
+        target = "https://example.com/small"
+        origin = FakeOriginResponse([b"abc"], {"Content-Length": "3", "Cache-Control": "max-age=60"})
+        response, body = await self.fetch_with(target, origin)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body, b"abc")
+        self.assertEqual(response.headers["X-CDN-Cache"], "MISS")
+        cached = await self.server._read_cache(target)
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached[0], b"abc")
+
     async def test_known_large_response_streams_without_caching(self):
         target = "https://example.com/large-known"
         origin = FakeOriginResponse([b"abc", b"def", b"ghi"], {"Content-Length": "9"})

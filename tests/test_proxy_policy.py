@@ -82,6 +82,12 @@ class RequestCacheSafetyTests(unittest.TestCase):
     def test_no_cache_request_bypasses_shared_cache(self):
         request = type("Request", (), {"headers": {"Cache-Control": "no-cache"}})()
         self.assertFalse(request_may_use_cache(request))
+    def test_pragma_no_cache_request_bypasses_shared_cache(self):
+        request = type("Request", (), {"headers": {"Pragma": "no-cache"}})()
+        self.assertFalse(request_may_use_cache(request))
+    def test_max_age_zero_request_bypasses_shared_cache(self):
+        request = type("Request", (), {"headers": {"Cache-Control": "max-age=0"}})()
+        self.assertFalse(request_may_use_cache(request))
     def test_public_request_can_use_cache(self):
         request = type("Request", (), {"headers": {}})()
         self.assertTrue(request_may_use_cache(request))

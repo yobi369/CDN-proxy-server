@@ -106,7 +106,7 @@ GitHub Actions runs the tests on pushes and pull requests. GitHub is used for so
 
 - Single-process prototype, not a globally distributed CDN.
 - No TLS termination, user accounts, purge API, distributed rate limiting, or multi-node cache coherence.
-- Range requests, conditional revalidation (ETag/Last-Modified), streaming large objects, and complete RFC cache semantics need more implementation and tests before production use.
+- Client-side conditional response handling, Range caching, streaming large objects, and complete RFC cache semantics need more implementation and tests before production use. Expired cached objects can be conditionally revalidated with origin ETag/Last-Modified validators.
 - Review deployment topology and outbound firewall rules before allowing access beyond localhost.
 
 ## License

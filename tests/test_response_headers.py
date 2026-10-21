@@ -3,6 +3,12 @@ from cdn_proxy_server import CDNServer
 
 
 class ResponseHeaderTests(unittest.TestCase):
+    def test_case_insensitive_header_merge_replaces_old_value(self):
+        headers = {"Cache-Control": "max-age=10", "ETag": '"old"'}
+        CDNServer._merge_response_headers(headers, {"cache-control": "max-age=60", "ETag": '"new"'})
+        self.assertEqual(headers["cache-control"], "max-age=60")
+        self.assertEqual(headers["ETag"], '"new"')
+        self.assertNotIn("Cache-Control", headers)
     def test_removes_hop_by_hop_and_connection_nominated_headers(self):
         headers = {
             "Connection": "keep-alive, X-Private-Hop",

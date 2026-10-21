@@ -60,6 +60,17 @@ class CachePolicyTests(unittest.TestCase):
         self.assertEqual(cache_policy({"Cache-Control": "public, max-age=120"}, 300, 3600), 120)
     def test_fallback_ttl(self):
         self.assertEqual(cache_policy({}, 300, 3600), 300)
+    def test_expires_header_sets_freshness(self):
+        headers = {"Date": "Wed, 21 Oct 2026 08:00:00 GMT", "Expires": "Wed, 21 Oct 2026 08:01:00 GMT"}
+        self.assertEqual(cache_policy(headers, 300, 3600), 60)
+    def test_age_reduces_remaining_freshness(self):
+        headers = {"Cache-Control": "max-age=60", "Age": "20"}
+        self.assertEqual(cache_policy(headers, 300, 3600), 40)
+    def test_expired_expires_is_not_cached(self):
+        headers = {"Date": "Wed, 21 Oct 2026 08:00:00 GMT", "Expires": "Wed, 21 Oct 2026 07:59:00 GMT"}
+        self.assertEqual(cache_policy(headers, 300, 3600), 0)
+    def test_pragma_no_cache_is_not_cached(self):
+        self.assertEqual(cache_policy({"Pragma": "no-cache"}, 300, 3600), 0)
 
 class RequestCacheSafetyTests(unittest.TestCase):
     def test_authorized_request_bypasses_shared_cache(self):

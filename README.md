@@ -81,7 +81,7 @@ When `PROXY_ACCESS_TOKEN` is configured (required for non-loopback binds and Doc
 | PROXY_CACHE_DIR | ./cache | Cache directory |
 | PROXY_ANALYTICS_DB | ./analytics.db | SQLite database |
 | PROXY_MAX_CACHE_BYTES | 268435456 | Approximate cache storage budget |
-| PROXY_MAX_OBJECT_BYTES | 8388608 | Maximum accepted origin body size |
+| PROXY_MAX_OBJECT_BYTES | 8388608 | Maximum response body eligible for caching; larger responses stream without caching |
 | PROXY_DEFAULT_TTL | 300 | Fallback TTL if origin gives no freshness |
 | PROXY_MAX_TTL | 86400 | Maximum cache TTL |
 | PROXY_TIMEOUT_SECONDS | 15 | Origin request timeout |
@@ -105,6 +105,17 @@ Research directions:
 
 Evaluate experiments against a fixed baseline with reproducible workloads, warm-up periods, repeated runs, and metrics such as hit ratio, p50/p95 latency, origin bytes avoided, resource use, and error rate. A policy must never weaken SSRF protections, authorization, cache privacy, or resource limits. Do not describe simulations as production results.
 
+## Live performance test
+
+After starting the proxy and configuring an allowlisted origin, measure the running service:
+
+    PROXY_ACCESS_TOKEN=your-proxy-token python experiments/load_test.py \
+      --proxy-url http://127.0.0.1:8080/proxy \
+      --target-url "https://example.com/assets/app.js" \
+      --requests 100 --concurrency 10
+
+The tool reports p50/p95/p99 latency, throughput, HTTP status counts, cache-status counts, errors, and response bytes. It is intentionally bounded to 10,000 requests and concurrency 100. Only test infrastructure and origin URLs you control or are authorized to load-test. Remote proxy endpoints require HTTPS and a proxy access token. Run warm-cache and cold-cache trials separately, repeat runs, and record network/origin conditions before comparing results.
+
 ## Development and tests
 
     pip install -r requirements-dev.txt
@@ -120,7 +131,7 @@ GitHub Actions runs the tests on pushes and pull requests. GitHub is used for so
 
 - Single-process prototype, not a globally distributed CDN.
 - No TLS termination, user accounts, purge API, distributed rate limiting, or multi-node cache coherence.
-- Cached GETs support common ETag/date preconditions and single byte ranges; multi-range requests are delegated to the origin. Full RFC 9111 cache semantics and streaming large objects still need more implementation and tests before production use. Expired cached objects can be conditionally revalidated with origin ETag/Last-Modified validators.
+- Cached GETs support common ETag/date preconditions and single byte ranges; multi-range requests are delegated to the origin. Full RFC 9111 cache semantics, Vary-aware cache keys, and multi-range caching still need more implementation and tests before production use. Large origin responses are streamed without caching when they exceed the configured object limit. Expired cached objects can be conditionally revalidated with origin ETag/Last-Modified validators.
 - Review deployment topology and outbound firewall rules before allowing access beyond localhost.
 
 ## License

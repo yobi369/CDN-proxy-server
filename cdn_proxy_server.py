@@ -217,13 +217,9 @@ class CDNServer:
             await self.session.close()
 
     def _load_cache_index(self):
-        """Build an in-memory target-to-variant index once at startup."""
+        """Build an in-memory target-to-variant index from filenames at startup."""
         for meta_path in Config.cache_dir.glob("*.json"):
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, TypeError):
-                meta = {}
-            base_key = meta.get("target_key") or self._base_key_from_path(meta_path)
+            base_key = self._base_key_from_path(meta_path)
             if base_key:
                 self.cache_index[base_key].add(meta_path)
 

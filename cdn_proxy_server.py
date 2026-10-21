@@ -73,6 +73,13 @@ def cache_policy(headers: dict[str, str], default_ttl: int, max_ttl: int) -> int
         ttl = default_ttl
     return max(0, min(ttl, max_ttl))
 
+def is_public_ip(value: str) -> bool:
+    """Return whether an IP address is globally routable (not private/reserved)."""
+    try:
+        return ipaddress.ip_address(value).is_global
+    except ValueError:
+        return False
+
 class PublicOnlyResolver(aiohttp.abc.AbstractResolver):
     """Resolve hostnames once and reject non-global IPs to reduce SSRF/DNS-rebinding risk."""
     async def resolve(self, host, port=0, family=socket.AF_INET):
@@ -80,8 +87,7 @@ class PublicOnlyResolver(aiohttp.abc.AbstractResolver):
         records = await loop.getaddrinfo(host, port, family=family, type=socket.SOCK_STREAM)
         resolved = []
         for record_family, _, proto, _, sockaddr in records:
-            address = ipaddress.ip_address(sockaddr[0])
-            if not address.is_global:
+            if not is_public_ip(sockaddr[0]):
                 raise OSError("Refusing to connect to a non-public IP address")
             resolved.append({
                 "hostname": host, "host": sockaddr[0], "port": sockaddr[1],

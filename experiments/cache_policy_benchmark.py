@@ -21,9 +21,9 @@ def make_trace(requests: int, objects: int, seed: int) -> list[str]:
 
 
 def simulate(trace: list[str], mode: str, ttl_seconds: int = 60,
-             step_seconds: float = 0.25) -> dict:
+             step_seconds: float = 0.25, policy_params: dict | None = None) -> dict:
     cache_expiry: dict[str, float] = {}
-    adaptive = AdaptivePolicy()
+    adaptive = AdaptivePolicy(**(policy_params or {}))
     latencies: list[float] = []
     hits = 0
     origin_requests = 0

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio, hashlib, ipaddress, json, logging, os, socket, sqlite3, time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 import aiohttp
@@ -54,7 +55,7 @@ def validate_target(raw_url: str, allowed_hosts: frozenset[str]) -> str:
     return parsed.geturl()
 
 def cache_policy(headers: dict[str, str], default_ttl: int, max_ttl: int) -> int:
-    """Return TTL seconds; zero means response is not safe to cache."""
+    """Return remaining freshness seconds; zero means response is not safe to cache."""
     lowered = {str(k).lower(): str(v) for k, v in headers.items()}
     directives = {}
     for part in lowered.get("cache-control", "").lower().split(","):
@@ -63,15 +64,34 @@ def cache_policy(headers: dict[str, str], default_ttl: int, max_ttl: int) -> int
             directives[key] = value.strip('"') if sep else None
     if any(k in directives for k in ("no-store", "private", "no-cache")):
         return 0
+    if "no-cache" in lowered.get("pragma", "").lower():
+        return 0
     if "set-cookie" in lowered or "vary" in lowered:
         # Until Vary-aware cache keys are implemented, never cache variant responses.
         return 0
+
     raw = directives.get("s-maxage", directives.get("max-age"))
     try:
-        ttl = int(raw) if raw is not None else default_ttl
-    except (ValueError, TypeError):
-        ttl = default_ttl
-    return max(0, min(ttl, max_ttl))
+        if raw is not None:
+            ttl = int(raw)
+        elif "expires" in lowered:
+            expires = parsedate_to_datetime(lowered["expires"])
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            date_value = lowered.get("date")
+            if date_value:
+                origin_date = parsedate_to_datetime(date_value)
+                if origin_date.tzinfo is None:
+                    origin_date = origin_date.replace(tzinfo=timezone.utc)
+            else:
+                origin_date = datetime.now(timezone.utc)
+            ttl = int((expires - origin_date).total_seconds())
+        else:
+            ttl = default_ttl
+        age = max(0, int(lowered.get("age", "0")))
+    except (ValueError, TypeError, OverflowError):
+        return 0
+    return max(0, min(ttl - age, max_ttl))
 
 def is_public_ip(value: str) -> bool:
     """Return whether an IP address is globally routable (not private/reserved)."""

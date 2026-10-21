@@ -1,6 +1,6 @@
 import unittest
 
-from cdn_proxy_server import CDNServer
+from cdn_proxy_server import CDNServer, request_can_read_cache
 
 
 class CachedHttpSemanticsTests(unittest.TestCase):
@@ -64,6 +64,9 @@ class CachedHttpSemanticsTests(unittest.TestCase):
     def test_multi_range_is_delegated_to_origin(self):
         response = self.response({"Range": "bytes=0-1,4-5"})
         self.assertIsNone(response)
+    def test_range_request_may_read_cache_but_not_write_shared_cache(self):
+        request = type("Request", (), {"headers": {"Range": "bytes=0-2"}})()
+        self.assertTrue(request_can_read_cache(request))
 
 
 if __name__ == "__main__":

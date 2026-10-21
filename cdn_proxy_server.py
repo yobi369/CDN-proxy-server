@@ -56,6 +56,9 @@ def validate_target(raw_url: str, allowed_hosts: frozenset[str]) -> str:
         raise web.HTTPForbidden(text="Target host is not in CDN_ALLOWED_HOSTS")
     return parsed.geturl()
 
+VARY_CACHE_ALLOWLIST = frozenset({"accept", "accept-language", "accept-encoding", "user-agent", "origin"})
+
+
 def parse_vary_fields(headers):
     """Return normalized Vary fields, or None for wildcard/invalid directives."""
     lowered = {str(k).lower(): str(v) for k, v in headers.items()}
@@ -66,6 +69,8 @@ def parse_vary_fields(headers):
         return None
     fields = sorted({field.strip().lower() for field in raw.split(",") if field.strip()})
     if not fields or any(not re.fullmatch(r"[!#$%&'*+.^_`|~0-9a-z-]+", field) for field in fields):
+        return None
+    if any(field not in VARY_CACHE_ALLOWLIST for field in fields):
         return None
     return fields
 
@@ -490,7 +495,7 @@ class CDNServer:
     def _origin_request_headers(request):
         # Forward only selected end-to-end headers; never forward Host or hop-by-hop fields.
         allowed = {
-            "accept", "accept-language", "accept-encoding", "authorization", "cookie",
+            "accept", "accept-language", "accept-encoding", "origin", "authorization", "cookie",
             "if-none-match", "if-modified-since", "if-match", "if-unmodified-since",
             "if-range", "range", "cache-control", "pragma", "user-agent",
         }

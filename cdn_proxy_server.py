@@ -501,16 +501,30 @@ class CDNServer:
         target = validate_target(request.query.get("url", ""), Config.allowed_hosts)
         host = urlsplit(target).hostname or ""
         cache_allowed = request_may_use_cache(request)
-        cached = await self._read_cache(target) if cache_allowed else None
+        cache_read_allowed = request_can_read_cache(request)
+        cached = await self._read_cache(target) if cache_read_allowed else None
         if cached:
             body, meta = cached
-            self.stats["hits"] += 1; self.stats["bytes_served"] += len(body)
-            self.policy.record(target, True)
-            headers = dict(meta.get("headers", {})); self._safe_headers(headers)
-            headers.update({"X-CDN-Cache": "HIT", "X-CDN-Server": "CDN-Proxy/2.0"})
-            elapsed = (time.monotonic() - started) * 1000
-            await self._log(ip, host, "HIT", len(body), elapsed)
-            return web.Response(body=body, headers=headers)
+            if cache_allowed:
+                self.stats["hits"] += 1; self.stats["bytes_served"] += len(body)
+                self.policy.record(target, True)
+                headers = dict(meta.get("headers", {})); self._safe_headers(headers)
+                headers.update({"X-CDN-Cache": "HIT", "X-CDN-Server": "CDN-Proxy/2.0"})
+                elapsed = (time.monotonic() - started) * 1000
+                await self._log(ip, host, "HIT", len(body), elapsed)
+                return web.Response(body=body, headers=headers)
+
+            cached_response = self._cached_conditional_response(request, body, meta.get("headers", {}))
+            if cached_response is not None:
+                served_bytes = len(cached_response.body or b"")
+                self.stats["hits"] += 1
+                self.stats["bytes_served"] += served_bytes
+                self.policy.record(target, True)
+                cached_response.headers["X-CDN-Cache"] = "HIT"
+                cached_response.headers["X-CDN-Server"] = "CDN-Proxy/2.0"
+                elapsed = (time.monotonic() - started) * 1000
+                await self._log(ip, host, f"HIT-{cached_response.status}", served_bytes, elapsed)
+                return cached_response
 
         conditional_names = {"if-none-match", "if-modified-since", "if-match", "if-unmodified-since", "if-range"}
         client_has_condition = any(name.lower() in conditional_names for name in request.headers)

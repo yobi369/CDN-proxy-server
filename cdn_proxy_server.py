@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-hostable HTTP caching proxy with a conservative adaptive policy."""
 from __future__ import annotations
-import asyncio, hashlib, ipaddress, json, logging, os, socket, sqlite3, time
+import asyncio, hashlib, hmac, ipaddress, json, logging, os, socket, sqlite3, time
 from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime

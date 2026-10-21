@@ -623,7 +623,7 @@ class CDNServer:
         host = urlsplit(target).hostname or ""
         cache_allowed = request_may_use_cache(request)
         cache_read_allowed = request_can_read_cache(request)
-        cached = await self._read_cache(target) if cache_read_allowed else None
+        cached = await self._read_cache(target, request.headers) if cache_read_allowed else None
         if cached:
             body, meta = cached
             if cache_allowed:
@@ -649,7 +649,7 @@ class CDNServer:
 
         conditional_names = {"if-none-match", "if-modified-since", "if-match", "if-unmodified-since", "if-range"}
         client_has_condition = any(name.lower() in conditional_names for name in request.headers)
-        stale = await self._read_stale_cache(target) if cache_allowed and not client_has_condition else None
+        stale = await self._read_stale_cache(target, request.headers) if cache_allowed and not client_has_condition else None
         if self.session is None: raise web.HTTPServiceUnavailable(text="Proxy is starting")
         outbound_headers = self._origin_request_headers(request)
         if stale:
@@ -673,7 +673,7 @@ class CDNServer:
                         headers["Age"] = "0"
                     ttl = cache_policy(headers, Config.default_ttl, Config.max_ttl)
                     adjusted = self.policy.adjust_ttl(target, ttl)
-                    stored = adjusted > 0 and await self._write_cache(target, body, headers, adjusted)
+                    stored = adjusted > 0 and await self._write_cache(target, body, headers, adjusted, request.headers)
                     if not stored:
                         await self._delete_cache(target)
                     self.policy.record(target, True)

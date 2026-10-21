@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
+from pathlib import Path
 from collections import Counter
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiments.cache_policy_benchmark import make_trace
 
 

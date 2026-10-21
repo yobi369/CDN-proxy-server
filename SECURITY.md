@@ -8,7 +8,7 @@ This project is an origin-allowlisted caching proxy prototype. It is not intende
 
 - Keep the listener bound to loopback unless a reviewed ingress layer provides TLS, client authentication, rate limiting, and request logging.
 - Configure `CDN_ALLOWED_HOSTS` with exact origin hostnames you control or are authorized to proxy.
-- Use a long, random `PROXY_STATS_TOKEN` and do not commit secrets.
+- Use distinct long, random `PROXY_ACCESS_TOKEN` and `PROXY_STATS_TOKEN` values in container/non-loopback deployments; the proxy access token is sent in `X-Proxy-Token` and is not forwarded to the origin. Never commit secrets.
 - Retain outbound firewall rules that block private, loopback, link-local, metadata-service, and other non-public destinations.
 - Keep the runtime non-root and restrict filesystem access.
 - Do not cache authenticated/cookie-bearing requests or responses that set cookies or use `Vary` until complete variant-aware caching is implemented.

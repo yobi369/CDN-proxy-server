@@ -47,6 +47,10 @@ class CacheStorageTests(unittest.IsolatedAsyncioTestCase):
             headers = {"Cache-Control": "max-age=60", "Vary": "Accept-Language"}
             self.assertTrue(await self.server._write_cache(target, b"hello-en", headers, 60, {"Accept-Language": "en"}))
             self.assertTrue(await self.server._write_cache(target, b"bonjour-fr", headers, 60, {"Accept-Language": "fr"}))
+            indexed_path = next(iter(self.server.cache_index[self.server._base_key(target)]))
+            persisted = indexed_path.read_text(encoding="utf-8")
+            self.assertNotIn('"en"', persisted)
+            self.assertNotIn('"fr"', persisted)
             english = await self.server._read_cache(target, {"Accept-Language": "en"})
             french = await self.server._read_cache(target, {"Accept-Language": "fr"})
             absent = await self.server._read_cache(target, {"Accept-Language": "de"})

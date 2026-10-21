@@ -417,6 +417,7 @@ class CDNServer:
             await asyncio.to_thread(meta_tmp.write_bytes, meta_bytes)
             await asyncio.to_thread(body_tmp.replace, body_path)
             await asyncio.to_thread(meta_tmp.replace, meta_path)
+            self.cache_index[base_key].add(meta_path)
             return True
         except OSError:
             LOG.exception("Cache write failed")

@@ -56,6 +56,19 @@ def validate_target(raw_url: str, allowed_hosts: frozenset[str]) -> str:
         raise web.HTTPForbidden(text="Target host is not in CDN_ALLOWED_HOSTS")
     return parsed.geturl()
 
+def parse_vary_fields(headers):
+    """Return normalized Vary fields, or None for wildcard/invalid directives."""
+    lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+    raw = lowered.get("vary", "").strip()
+    if not raw:
+        return []
+    if raw == "*":
+        return None
+    fields = sorted({field.strip().lower() for field in raw.split(",") if field.strip()})
+    if not fields or any(not re.fullmatch(r"[!#$%&'*+.^_`|~0-9a-z-]+", field) for field in fields):
+        return None
+    return fields
+
 def cache_policy(headers: dict[str, str], default_ttl: int, max_ttl: int) -> int:
     """Return remaining freshness seconds; zero means response is not safe to cache."""
     lowered = {str(k).lower(): str(v) for k, v in headers.items()}
@@ -68,8 +81,7 @@ def cache_policy(headers: dict[str, str], default_ttl: int, max_ttl: int) -> int
         return 0
     if "no-cache" in lowered.get("pragma", "").lower():
         return 0
-    if "set-cookie" in lowered or "vary" in lowered:
-        # Until Vary-aware cache keys are implemented, never cache variant responses.
+    if "set-cookie" in lowered or parse_vary_fields(lowered) is None:
         return 0
 
     raw = directives.get("s-maxage", directives.get("max-age"))

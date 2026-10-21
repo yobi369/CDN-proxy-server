@@ -33,6 +33,7 @@ class Config:
     allowed_hosts = frozenset(h.strip().lower().rstrip(".") for h in os.getenv("CDN_ALLOWED_HOSTS", "").split(",") if h.strip())
     stats_token = os.getenv("PROXY_STATS_TOKEN", "")
     access_token = os.getenv("PROXY_ACCESS_TOKEN", "")
+    log_client_ip = os.getenv("PROXY_LOG_CLIENT_IP", "false").lower() in {"1", "true", "yes"}
 
 def validate_target(raw_url: str, allowed_hosts: frozenset[str]) -> str:
     """Validate absolute HTTP(S) URL and enforce exact hostname allowlisting."""
@@ -330,7 +331,8 @@ class CDNServer:
         try:
             with sqlite3.connect(Config.db_path, timeout=2) as conn:
                 conn.execute("INSERT INTO requests(timestamp,client_ip,target_host,cache_status,response_size,response_time_ms) VALUES(?,?,?,?,?,?)",
-                    (datetime.now(timezone.utc).isoformat(), ip, host, status, size, elapsed_ms))
+                    (datetime.now(timezone.utc).isoformat(),
+                     ip if Config.log_client_ip else None, host, status, size, elapsed_ms))
         except sqlite3.Error:
             LOG.exception("Analytics write failed")
 

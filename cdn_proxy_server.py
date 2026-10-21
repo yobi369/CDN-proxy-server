@@ -32,6 +32,7 @@ class Config:
     max_requests_per_minute = env_int("PROXY_RATE_LIMIT", 120)
     allowed_hosts = frozenset(h.strip().lower().rstrip(".") for h in os.getenv("CDN_ALLOWED_HOSTS", "").split(",") if h.strip())
     stats_token = os.getenv("PROXY_STATS_TOKEN", "")
+    access_token = os.getenv("PROXY_ACCESS_TOKEN", "")
 
 def validate_target(raw_url: str, allowed_hosts: frozenset[str]) -> str:
     """Validate absolute HTTP(S) URL and enforce exact hostname allowlisting."""
@@ -316,6 +317,13 @@ class CDNServer:
                     (datetime.now(timezone.utc).isoformat(), ip, host, status, size, elapsed_ms))
         except sqlite3.Error: LOG.exception("Analytics write failed")
 
+    def _proxy_authorized(self, request):
+        if Config.access_token:
+            supplied = request.headers.get("X-Proxy-Token", "")
+            return hmac.compare_digest(supplied, Config.access_token)
+        # Tokenless mode is permitted only for loopback-bound local development.
+        return Config.host.lower() in {"127.0.0.1", "::1", "localhost"}
+
     def _stats_authorized(self, request):
         if not Config.stats_token:
             return False
@@ -348,6 +356,8 @@ class CDNServer:
         return headers
 
     async def handle_request(self, request):
+        if not self._proxy_authorized(request):
+            raise web.HTTPUnauthorized(text="Proxy access requires X-Proxy-Token")
         started = time.monotonic()
         ip = request.remote or "unknown"
         if self._rate_limited(ip): raise web.HTTPTooManyRequests(text="Rate limit exceeded")
@@ -476,4 +486,6 @@ if __name__ == "__main__":
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     if not Config.allowed_hosts:
         raise SystemExit("Set CDN_ALLOWED_HOSTS to a comma-separated allowlist before starting.")
+    if Config.host.lower() not in {"127.0.0.1", "::1", "localhost"} and not Config.access_token:
+        raise SystemExit("Set PROXY_ACCESS_TOKEN before binding beyond loopback.")
     web.run_app(create_app(), host=Config.host, port=Config.port)

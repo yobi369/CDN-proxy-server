@@ -96,6 +96,13 @@ class AdaptivePolicyTests(unittest.TestCase):
         self.assertEqual(AdaptivePolicy().adjust_ttl("asset", 0), 0)
     def test_cold_object_gets_shorter_ttl(self):
         self.assertEqual(AdaptivePolicy().adjust_ttl("cold", 120), 60)
+    def test_history_is_bounded(self):
+        policy = AdaptivePolicy(max_keys=2)
+        policy.record("a", False)
+        policy.record("b", False)
+        policy.record("c", False)
+        self.assertEqual(len(policy.counts), 2)
+        self.assertNotIn("a", policy.counts)
 
 if __name__ == "__main__":
     unittest.main()

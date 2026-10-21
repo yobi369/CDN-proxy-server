@@ -281,6 +281,11 @@ class CDNServer:
         return total
 
     async def _find_cache_entry(self, target, request_headers, fresh_only):
+        # Serialize reads with writes and purge to avoid observing half-replaced entries.
+        async with self.cache_lock:
+            return await self._find_cache_entry_locked(target, request_headers, fresh_only)
+
+    async def _find_cache_entry_locked(self, target, request_headers, fresh_only):
         base_key = self._base_key(target)
         request_values = self._request_header_values(request_headers)
         for meta_path in tuple(self.cache_index.get(base_key, ())):

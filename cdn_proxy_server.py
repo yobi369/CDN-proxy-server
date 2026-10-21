@@ -258,7 +258,11 @@ class CDNServer:
         if fields is None:
             return None
         request_values = self._request_header_values(request_headers)
-        vary_values = {field: request_values.get(field, "") for field in fields}
+        # Persist only hashes of variant header values, never raw request headers.
+        vary_values = {
+            field: hashlib.sha256(request_values.get(field, "").encode("utf-8")).hexdigest()
+            for field in fields
+        }
         if not fields:
             variant_id = "default"
         else:
@@ -289,7 +293,11 @@ class CDNServer:
                     continue
                 fields = meta.get("vary", [])
                 values = meta.get("vary_values", {})
-                if any(request_values.get(field, "") != values.get(field, "") for field in fields):
+                if any(
+                    hashlib.sha256(request_values.get(field, "").encode("utf-8")).hexdigest()
+                    != values.get(field, "")
+                    for field in fields
+                ):
                     continue
                 age = time.time() - float(meta["stored_at"])
                 ttl = int(meta["ttl"])

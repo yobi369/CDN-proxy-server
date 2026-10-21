@@ -79,6 +79,9 @@ Evaluate experiments against a fixed baseline with reproducible workloads, warm-
 
     pip install -r requirements-dev.txt
     python -m unittest discover -s tests -v
+    python experiments/cache_policy_benchmark.py --requests 10000 --objects 100 --seed 2026
+
+The benchmark uses a deterministic synthetic Zipf-like workload and illustrative latency assumptions. Its output is **simulation, not a production performance claim**. Use representative traffic and measured origin/cache latency before selecting a policy.
 
 GitHub Actions runs the tests on pushes and pull requests. GitHub is used for source control and verification; the proxy itself runs independently on your infrastructure.
 

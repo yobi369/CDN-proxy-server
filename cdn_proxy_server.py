@@ -261,6 +261,16 @@ class CDNServer:
     def _stats_authorized(self, request):
         return bool(Config.stats_token) and request.headers.get("Authorization", "") == f"Bearer {Config.stats_token}"
 
+    async def _read_bounded_body(self, stream):
+        chunks = []
+        total = 0
+        async for chunk in stream.iter_chunked(64 * 1024):
+            total += len(chunk)
+            if total > Config.max_object_bytes:
+                raise web.HTTPBadGateway(text="Origin response exceeds configured object limit")
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     async def handle_request(self, request):
         started = time.monotonic()
         ip = request.remote or "unknown"
@@ -280,10 +290,11 @@ class CDNServer:
         if self.session is None: raise web.HTTPServiceUnavailable(text="Proxy is starting")
         try:
             async with self.session.get(target, allow_redirects=False) as origin:
-                body = await origin.content.read(Config.max_object_bytes + 1)
-                if len(body) > Config.max_object_bytes:
+                try:
+                    body = await self._read_bounded_body(origin.content)
+                except web.HTTPBadGateway:
                     self.stats["bypasses"] += 1
-                    raise web.HTTPBadGateway(text="Origin response exceeds configured object limit")
+                    raise
                 headers = dict(origin.headers)
                 ttl = cache_policy(headers, Config.default_ttl, Config.max_ttl)
                 adjusted = self.policy.adjust_ttl(target, ttl)

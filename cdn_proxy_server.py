@@ -275,7 +275,7 @@ class CDNServer:
     async def _find_cache_entry(self, target, request_headers, fresh_only):
         base_key = self._base_key(target)
         request_values = self._request_header_values(request_headers)
-        for meta_path in Config.cache_dir.glob(f"{base_key}*.json"):
+        for meta_path in tuple(self.cache_index.get(base_key, ())):
             if not (meta_path.stem == base_key or meta_path.stem.startswith(base_key + "-")):
                 continue
             try:
@@ -311,16 +311,18 @@ class CDNServer:
     async def _delete_cache(self, target):
         async with self.cache_lock:
             base_key = self._base_key(target)
-            meta_paths = list(Config.cache_dir.glob(f"{base_key}*.json"))
-            body_paths = list(Config.cache_dir.glob(f"{base_key}*.body"))
-            temp_paths = list(Config.cache_dir.glob(f"{base_key}*.tmp"))
-            paths = meta_paths + body_paths + temp_paths
+            meta_paths = set(self.cache_index.get(base_key, ()))
+            meta_paths.update(Config.cache_dir.glob(f"{base_key}*.json"))
+            body_paths = set(Config.cache_dir.glob(f"{base_key}*.body"))
+            temp_paths = set(Config.cache_dir.glob(f"{base_key}*.tmp"))
+            paths = list(meta_paths | body_paths | temp_paths)
             existed = any(path.exists() for path in paths)
             for path in paths:
                 try:
                     await asyncio.to_thread(path.unlink, missing_ok=True)
                 except OSError:
                     LOG.warning("Unable to remove cache entry %s", path.name)
+            self.cache_index.pop(base_key, None)
             return existed
 
     async def _write_cache(self, target, body, headers, ttl, request_headers=None):
@@ -375,6 +377,7 @@ class CDNServer:
                         try:
                             await asyncio.to_thread(bp.unlink, missing_ok=True)
                             await asyncio.to_thread(mp.unlink, missing_ok=True)
+                            self.cache_index[base_key].discard(mp)
                             continue
                         except OSError:
                             LOG.warning("Unable to replace incompatible cache variant %s", mp.name)
@@ -399,6 +402,9 @@ class CDNServer:
                 try:
                     await asyncio.to_thread(old_body.unlink, missing_ok=True)
                     await asyncio.to_thread(old_meta.unlink, missing_ok=True)
+                    old_key = self._base_key_from_path(old_meta)
+                    if old_key:
+                        self.cache_index[old_key].discard(old_meta)
                     size -= old_size
                 except OSError:
                     pass

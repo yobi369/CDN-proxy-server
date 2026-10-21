@@ -120,6 +120,7 @@ class CDNServer:
     def __init__(self):
         Config.cache_dir.mkdir(parents=True, exist_ok=True)
         self.session = None
+        self.cache_lock = asyncio.Lock()
         self.rate_events = defaultdict(deque)
         self.policy = AdaptivePolicy()
         self.stats = {"hits": 0, "misses": 0, "bypasses": 0, "bytes_served": 0}
@@ -167,32 +168,76 @@ class CDNServer:
     async def _write_cache(self, target, body, headers, ttl):
         if ttl <= 0 or len(body) > Config.max_object_bytes or len(body) > Config.max_cache_bytes:
             return False
+        async with self.cache_lock:
+            return await self._write_cache_locked(target, body, headers, ttl)
+
+    async def _write_cache_locked(self, target, body, headers, ttl):
         body_path, meta_path = self._paths(target)
+        stored_at = time.time()
+        meta = {"stored_at": stored_at, "ttl": ttl, "size": len(body), "headers": headers}
+        meta_bytes = json.dumps(meta, separators=(",", ":")).encode("utf-8")
+        new_size = len(body) + len(meta_bytes)
+        if new_size > Config.max_cache_bytes:
+            return False
+
         try:
             entries, size = [], 0
             for mp in Config.cache_dir.glob("*.json"):
+                bp = mp.with_suffix(".body")
                 try:
-                    meta = json.loads(await asyncio.to_thread(mp.read_text, encoding="utf-8"))
-                    bp = mp.with_suffix(".body")
-                    n = bp.stat().st_size if bp.exists() else 0
-                    size += n + mp.stat().st_size
-                    entries.append((float(meta.get("stored_at", 0)), mp, bp))
-                except (OSError, ValueError, TypeError): continue
-            for _, old_meta, old_body in sorted(entries):
-                if size + len(body) <= Config.max_cache_bytes: break
+                    meta_size = mp.stat().st_size
+                    body_size = bp.stat().st_size if bp.exists() else 0
+                    if mp == meta_path:
+                        continue
+                    size += meta_size + body_size
+                    try:
+                        old_meta = json.loads(await asyncio.to_thread(mp.read_text, encoding="utf-8"))
+                        stored = float(old_meta.get("stored_at", 0))
+                    except (OSError, ValueError, TypeError):
+                        stored = 0
+                    entries.append((stored, mp, bp, meta_size + body_size))
+                except OSError:
+                    continue
+
+            # Remove orphaned body files so abandoned writes do not consume the budget forever.
+            known_bodies = {entry[2].name for entry in entries}
+            known_bodies.add(body_path.name)
+            for orphan in Config.cache_dir.glob("*.body"):
+                if orphan.name not in known_bodies:
+                    try:
+                        orphan.unlink()
+                    except OSError:
+                        pass
+
+            for _, old_meta, old_body, old_size in sorted(entries):
+                if size + new_size <= Config.max_cache_bytes:
+                    break
                 try:
-                    removed = (old_body.stat().st_size if old_body.exists() else 0) + (old_meta.stat().st_size if old_meta.exists() else 0)
-                    old_body.unlink(missing_ok=True); old_meta.unlink(missing_ok=True); size -= removed
-                except OSError: pass
-            meta = {"stored_at": time.time(), "ttl": ttl, "size": len(body), "headers": headers}
-            await asyncio.to_thread(body_path.write_bytes, body)
-            await asyncio.to_thread(meta_path.write_text, json.dumps(meta), encoding="utf-8")
+                    old_body.unlink(missing_ok=True)
+                    old_meta.unlink(missing_ok=True)
+                    size -= old_size
+                except OSError:
+                    pass
+            if size + new_size > Config.max_cache_bytes:
+                return False
+
+            body_tmp = body_path.with_suffix(".body.tmp")
+            meta_tmp = meta_path.with_suffix(".json.tmp")
+            await asyncio.to_thread(body_tmp.write_bytes, body)
+            await asyncio.to_thread(meta_tmp.write_bytes, meta_bytes)
+            await asyncio.to_thread(body_tmp.replace, body_path)
+            await asyncio.to_thread(meta_tmp.replace, meta_path)
             return True
         except OSError:
             LOG.exception("Cache write failed")
             return False
 
     def _rate_limited(self, ip):
+        if ip not in self.rate_events and len(self.rate_events) >= 10000:
+            for stale_ip in [key for key, queue in self.rate_events.items() if not queue]:
+                self.rate_events.pop(stale_ip, None)
+            if len(self.rate_events) >= 10000:
+                return True
         now = time.monotonic()
         events = self.rate_events[ip]
         while events and now - events[0] >= 60: events.popleft()
@@ -256,7 +301,7 @@ class CDNServer:
     def _safe_headers(headers):
         for name in list(headers):
             if name.lower() in {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-                "te", "trailer", "transfer-encoding", "upgrade", "content-length", "content-encoding"}:
+                "te", "trailer", "transfer-encoding", "upgrade", "content-length"}:
                 headers.pop(name, None)
 
     async def stats_handler(self, request):
@@ -276,7 +321,7 @@ def create_app():
     server = CDNServer()
     app = web.Application(client_max_size=1024 * 1024)
     app["cdn_server"] = server
-    app.router.add_get("/proxy", server.handle_request)
+    app.router.add_get("/proxy", server.handle_request, allow_head=False)
     app.router.add_get("/stats", server.stats_handler)
     app.router.add_get("/health", server.health_handler)
     app.on_startup.append(server.start); app.on_cleanup.append(server.close)

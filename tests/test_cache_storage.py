@@ -16,7 +16,7 @@ class CacheStorageTests(unittest.IsolatedAsyncioTestCase):
         self.old_max_object_bytes = Config.max_object_bytes
         Config.cache_dir = Path(self.temp.name) / "cache"
         Config.db_path = str(Path(self.temp.name) / "analytics.db")
-        Config.max_cache_bytes = 150
+        Config.max_cache_bytes = 300
         Config.max_object_bytes = 100
         self.server = CDNServer()
 

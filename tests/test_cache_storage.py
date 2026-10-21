@@ -32,6 +32,7 @@ class CacheStorageTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.server._write_cache("https://example.com/b", b"b" * 40, {}, 60))
         self.assertLessEqual(self.server._cache_size(), Config.max_cache_bytes)
         self.assertIsNone(await self.server._read_cache("https://example.com/a"))
+        self.assertNotIn(self.server._base_key("https://example.com/a"), self.server.cache_index)
         cached = await self.server._read_cache("https://example.com/b")
         self.assertIsNotNone(cached)
         self.assertEqual(cached[0], b"b" * 40)
@@ -53,8 +54,22 @@ class CacheStorageTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(french[0], b"bonjour-fr")
             self.assertIsNone(absent)
             self.assertTrue(await self.server._delete_cache(target))
+            self.assertNotIn(self.server._base_key(target), self.server.cache_index)
             self.assertIsNone(await self.server._read_cache(target, {"Accept-Language": "en"}))
             self.assertIsNone(await self.server._read_cache(target, {"Accept-Language": "fr"}))
+        finally:
+            Config.max_cache_bytes = old_budget
+
+    async def test_variant_index_rebuilds_after_restart(self):
+        old_budget = Config.max_cache_bytes
+        Config.max_cache_bytes = 10000
+        try:
+            target = "https://example.com/restart"
+            headers = {"Cache-Control": "max-age=60", "Vary": "Accept-Language"}
+            self.assertTrue(await self.server._write_cache(target, b"english", headers, 60, {"Accept-Language": "en"}))
+            restarted = CDNServer()
+            cached = await restarted._read_cache(target, {"Accept-Language": "en"})
+            self.assertEqual(cached[0], b"english")
         finally:
             Config.max_cache_bytes = old_budget
 

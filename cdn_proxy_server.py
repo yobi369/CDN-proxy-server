@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-hostable HTTP caching proxy with a conservative adaptive policy."""
 from __future__ import annotations
-import asyncio, hashlib, hmac, ipaddress, json, logging, os, socket, sqlite3, time
+import asyncio, hashlib, hmac, ipaddress, json, logging, os, re, socket, sqlite3, time
 from collections import OrderedDict, defaultdict, deque
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -122,14 +122,9 @@ class PublicOnlyResolver(aiohttp.abc.AbstractResolver):
     async def close(self):
         return None
 
-def request_may_use_cache(request):
-    """Avoid shared caching for personalized, conditional, range, or bypass requests."""
+def request_can_read_cache(request):
+    """Allow cache reads unless credentials or explicit request directives prohibit sharing."""
     if request.headers.get("Authorization") or request.headers.get("Cookie"):
-        return False
-    if any(request.headers.get(name) for name in (
-        "Range", "If-Range", "If-None-Match", "If-Modified-Since",
-        "If-Match", "If-Unmodified-Since",
-    )):
         return False
     directives = {}
     for part in request.headers.get("Cache-Control", "").lower().split(","):
@@ -141,6 +136,16 @@ def request_may_use_cache(request):
     if directives.get("max-age") == "0":
         return False
     return "no-cache" not in request.headers.get("Pragma", "").lower()
+
+
+def request_may_use_cache(request):
+    """Allow shared cache writes only for ordinary, non-conditional, non-range requests."""
+    if not request_can_read_cache(request):
+        return False
+    return not any(request.headers.get(name) for name in (
+        "Range", "If-Range", "If-None-Match", "If-Modified-Since",
+        "If-Match", "If-Unmodified-Since",
+    ))
 
 class AdaptivePolicy:
     """Explainable research baseline with bounded, configurable policy parameters."""

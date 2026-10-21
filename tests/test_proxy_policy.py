@@ -85,6 +85,12 @@ class RequestCacheSafetyTests(unittest.TestCase):
     def test_public_request_can_use_cache(self):
         request = type("Request", (), {"headers": {}})()
         self.assertTrue(request_may_use_cache(request))
+    def test_range_request_bypasses_shared_cache(self):
+        request = type("Request", (), {"headers": {"Range": "bytes=0-10"}})()
+        self.assertFalse(request_may_use_cache(request))
+    def test_conditional_request_bypasses_shared_cache(self):
+        request = type("Request", (), {"headers": {"If-None-Match": '"v1"'}})()
+        self.assertFalse(request_may_use_cache(request))
 
 class AdaptivePolicyTests(unittest.TestCase):
     def test_never_extends_origin_ttl(self):

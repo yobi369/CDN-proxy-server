@@ -1,0 +1,42 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from cdn_proxy_server import CDNServer, Config
+
+
+class CacheStorageTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.old_cache_dir = Config.cache_dir
+        self.old_db_path = Config.db_path
+        self.old_max_cache_bytes = Config.max_cache_bytes
+        self.old_max_object_bytes = Config.max_object_bytes
+        Config.cache_dir = Path(self.temp.name) / "cache"
+        Config.db_path = str(Path(self.temp.name) / "analytics.db")
+        Config.max_cache_bytes = 150
+        Config.max_object_bytes = 100
+        self.server = CDNServer()
+
+    async def asyncTearDown(self):
+        Config.cache_dir = self.old_cache_dir
+        Config.db_path = self.old_db_path
+        Config.max_cache_bytes = self.old_max_cache_bytes
+        Config.max_object_bytes = self.old_max_object_bytes
+        self.temp.cleanup()
+
+    async def test_cache_storage_stays_within_budget(self):
+        self.assertTrue(await self.server._write_cache("https://example.com/a", b"a" * 40, {}, 60))
+        self.assertTrue(await self.server._write_cache("https://example.com/b", b"b" * 40, {}, 60))
+        self.assertLessEqual(self.server._cache_size(), Config.max_cache_bytes)
+        self.assertIsNone(await self.server._read_cache("https://example.com/a"))
+        cached = await self.server._read_cache("https://example.com/b")
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached[0], b"b" * 40)
+
+    async def test_oversized_object_is_not_cached(self):
+        self.assertFalse(await self.server._write_cache("https://example.com/large", b"x" * 101, {}, 60))
+
+
+if __name__ == "__main__":
+    unittest.main()

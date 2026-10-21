@@ -65,17 +65,18 @@ def analyze_events(events: list[dict], threshold: float = 3.5,
     for event in usable:
         host = str(event.get("target_host") or "unknown")
         baseline = baselines.get(host)
-        if not baseline:
-            continue
         latency = max(0.0, float(event.get("response_time_ms") or 0.0))
         size = max(0.0, float(event.get("response_size") or 0.0))
-        latency_score = (latency - baseline["latency_median_ms"]) / baseline["_latency_scale"]
-        size_score = (size - baseline["size_median_bytes"]) / baseline["_size_scale"]
+        latency_score = None
+        size_score = None
         reasons = []
-        if latency_score > threshold:
-            reasons.append("latency_outlier")
-        if size_score > threshold:
-            reasons.append("response_size_outlier")
+        if baseline:
+            latency_score = (latency - baseline["latency_median_ms"]) / baseline["_latency_scale"]
+            size_score = (size - baseline["size_median_bytes"]) / baseline["_size_scale"]
+            if latency_score > threshold:
+                reasons.append("latency_outlier")
+            if size_score > threshold:
+                reasons.append("response_size_outlier")
         if str(event.get("cache_status", "")).startswith("STREAM-ERROR"):
             reasons.append("stream_error")
         if reasons:
@@ -87,8 +88,8 @@ def analyze_events(events: list[dict], threshold: float = 3.5,
                 "response_time_ms": round(latency, 3),
                 "response_size_bytes": int(size),
                 "reasons": sorted(set(reasons)),
-                "robust_latency_score": round(latency_score, 3),
-                "robust_size_score": round(size_score, 3),
+                "robust_latency_score": round(latency_score, 3) if latency_score is not None else None,
+                "robust_size_score": round(size_score, 3) if size_score is not None else None,
             })
 
     public_baselines = {

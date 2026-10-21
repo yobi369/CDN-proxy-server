@@ -383,7 +383,7 @@ class CDNServer:
             if total > Config.max_object_bytes:
                 return None, (chunks, iterator)
 
-    async def _stream_bypass(self, request, origin, initial_chunks, iterator, ip, host, started):
+    async def _stream_bypass(self, request, origin, initial_chunks, iterator, target, ip, host, started):
         headers = dict(origin.headers)
         self._safe_headers(headers)
         headers.update({"X-CDN-Cache": "BYPASS", "X-CDN-Server": "CDN-Proxy/2.0"})
@@ -400,7 +400,7 @@ class CDNServer:
             await response.write_eof()
         except (ConnectionResetError, BrokenPipeError):
             LOG.debug("Client disconnected during streamed response from %s", host)
-        self.policy.record(origin.url.human_repr() if hasattr(origin, "url") else host, False)
+        self.policy.record(target, False)
         self.stats["misses"] += 1
         self.stats["bypasses"] += 1
         self.stats["bytes_served"] += total
@@ -608,20 +608,34 @@ class CDNServer:
                     await self._log(ip, host, "REVALIDATED", len(body), elapsed)
                     return web.Response(body=body, status=200, headers=headers)
 
-                try:
-                    body = await self._read_bounded_body(origin.content)
-                except web.HTTPBadGateway:
-                    self.stats["bypasses"] += 1
-                    raise
                 headers = dict(origin.headers)
                 ttl = cache_policy(headers, Config.default_ttl, Config.max_ttl)
                 adjusted = self.policy.adjust_ttl(target, ttl)
+                content_length = self._header_value(headers, "Content-Length")
+                try:
+                    known_large = content_length is not None and int(content_length) > Config.max_object_bytes
+                except ValueError:
+                    known_large = False
+                if known_large:
+                    iterator = origin.content.iter_chunked(64 * 1024).__aiter__()
+                    return await self._stream_bypass(
+                        request, origin, [], iterator, target, ip, host, started
+                    )
+
+                body, overflow = await self._collect_cacheable_body(origin.content)
+                if overflow is not None:
+                    initial_chunks, iterator = overflow
+                    return await self._stream_bypass(
+                        request, origin, initial_chunks, iterator, target, ip, host, started
+                    )
                 stored = (origin.status == 200 and request.method == "GET"
                           and request_may_use_cache(request)
                           and await self._write_cache(target, body, headers, adjusted))
                 self.policy.record(target, False)
                 status = "MISS" if stored else "BYPASS"
-                self.stats["misses"] += 1; self.stats["bypasses"] += int(not stored); self.stats["bytes_served"] += len(body)
+                self.stats["misses"] += 1
+                self.stats["bypasses"] += int(not stored)
+                self.stats["bytes_served"] += len(body)
                 self._safe_headers(headers)
                 headers.update({"X-CDN-Cache": status, "X-CDN-Server": "CDN-Proxy/2.0"})
                 elapsed = (time.monotonic() - started) * 1000

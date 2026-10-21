@@ -279,7 +279,11 @@ class CDNServer:
         except sqlite3.Error: LOG.exception("Analytics write failed")
 
     def _stats_authorized(self, request):
-        return bool(Config.stats_token) and request.headers.get("Authorization", "") == f"Bearer {Config.stats_token}"
+        if not Config.stats_token:
+            return False
+        supplied = request.headers.get("Authorization", "")
+        expected = f"Bearer {Config.stats_token}"
+        return hmac.compare_digest(supplied, expected)
 
     async def _read_bounded_body(self, stream):
         chunks = []
@@ -336,9 +340,15 @@ class CDNServer:
 
     @staticmethod
     def _safe_headers(headers):
+        # RFC hop-by-hop fields include any extra headers nominated by Connection.
+        connection_value = next((str(value) for name, value in headers.items()
+                                 if name.lower() == "connection"), "")
+        connection_tokens = {token.strip().lower() for token in connection_value.split(",") if token.strip()}
+        blocked = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+                   "te", "trailer", "transfer-encoding", "upgrade", "content-length"}
+        blocked.update(connection_tokens)
         for name in list(headers):
-            if name.lower() in {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-                "te", "trailer", "transfer-encoding", "upgrade", "content-length"}:
+            if name.lower() in blocked:
                 headers.pop(name, None)
 
     async def stats_handler(self, request):

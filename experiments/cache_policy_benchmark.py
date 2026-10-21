@@ -6,8 +6,6 @@ import argparse
 import json
 import random
 import statistics
-from collections import defaultdict
-
 from cdn_proxy_server import AdaptivePolicy
 
 

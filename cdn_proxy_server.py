@@ -358,16 +358,6 @@ class CDNServer:
         expected = f"Bearer {Config.stats_token}"
         return hmac.compare_digest(supplied, expected)
 
-    async def _read_bounded_body(self, stream):
-        chunks = []
-        total = 0
-        async for chunk in stream.iter_chunked(64 * 1024):
-            total += len(chunk)
-            if total > Config.max_object_bytes:
-                raise web.HTTPBadGateway(text="Origin response exceeds configured object limit")
-            chunks.append(chunk)
-        return b"".join(chunks)
-
     async def _collect_cacheable_body(self, stream):
         """Buffer a small response, or return a bounded prefix and iterator for streaming."""
         iterator = stream.iter_chunked(64 * 1024).__aiter__()

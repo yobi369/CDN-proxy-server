@@ -18,6 +18,7 @@ services:
       PROXY_MAX_TTL: "${PROXY_MAX_TTL:-86400}"
       PROXY_TIMEOUT_SECONDS: "${PROXY_TIMEOUT_SECONDS:-15}"
       PROXY_RATE_LIMIT: "${PROXY_RATE_LIMIT:-120}"
+      PROXY_LOG_CLIENT_IP: "${PROXY_LOG_CLIENT_IP:-false}"
     volumes:
       - proxy-cache:/app/cache
       - proxy-data:/data

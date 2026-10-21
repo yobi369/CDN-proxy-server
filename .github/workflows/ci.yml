@@ -41,3 +41,9 @@ jobs:
         run: python experiments/cache_policy_benchmark.py --requests 1000 --objects 25 --seed 2026
       - name: Validate Docker image build
         run: docker build --tag cdn-proxy-server:test .
+      - name: Validate Compose configuration
+        env:
+          CDN_ALLOWED_HOSTS: example.com
+          PROXY_ACCESS_TOKEN: test-access-token
+          PROXY_STATS_TOKEN: test-stats-token
+        run: docker compose config --quiet

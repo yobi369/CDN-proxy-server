@@ -302,6 +302,20 @@ class CDNServer:
             chunks.append(chunk)
         return b"".join(chunks)
 
+    @staticmethod
+    def _origin_request_headers(request):
+        # Forward only selected end-to-end headers; never forward Host or hop-by-hop fields.
+        allowed = {
+            "accept", "accept-language", "accept-encoding", "authorization", "cookie",
+            "if-none-match", "if-modified-since", "if-match", "if-unmodified-since",
+            "if-range", "range", "cache-control", "pragma", "user-agent",
+        }
+        headers = {name: value for name, value in request.headers.items()
+                   if name.lower() in allowed}
+        if not any(name.lower() == "accept-encoding" for name in headers):
+            headers["Accept-Encoding"] = "identity"
+        return headers
+
     async def handle_request(self, request):
         started = time.monotonic()
         ip = request.remote or "unknown"
@@ -320,7 +334,8 @@ class CDNServer:
             return web.Response(body=body, headers=headers)
         if self.session is None: raise web.HTTPServiceUnavailable(text="Proxy is starting")
         try:
-            async with self.session.get(target, allow_redirects=False) as origin:
+            async with self.session.get(target, headers=self._origin_request_headers(request),
+                                        allow_redirects=False) as origin:
                 try:
                     body = await self._read_bounded_body(origin.content)
                 except web.HTTPBadGateway:

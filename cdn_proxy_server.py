@@ -209,9 +209,35 @@ class CDNServer:
         if self.session:
             await self.session.close()
 
-    def _paths(self, target):
-        key = hashlib.sha256(target.encode("utf-8")).hexdigest()
-        return Config.cache_dir / f"{key}.body", Config.cache_dir / f"{key}.json"
+    def _base_key(self, target):
+        return hashlib.sha256(target.encode("utf-8")).hexdigest()
+
+    def _paths(self, target, variant_id="default"):
+        key = self._base_key(target)
+        stem = key if variant_id == "default" else f"{key}-{variant_id}"
+        return Config.cache_dir / f"{stem}.body", Config.cache_dir / f"{stem}.json"
+
+    @staticmethod
+    def _request_header_values(request_headers):
+        values = {}
+        for name, value in (request_headers or {}).items():
+            key = str(name).lower()
+            value = str(value)
+            values[key] = f"{values[key]}, {value}" if key in values else value
+        return values
+
+    def _variant_info(self, target, response_headers, request_headers):
+        fields = parse_vary_fields(response_headers)
+        if fields is None:
+            return None
+        request_values = self._request_header_values(request_headers)
+        vary_values = {field: request_values.get(field, "") for field in fields}
+        if not fields:
+            variant_id = "default"
+        else:
+            signature = json.dumps(vary_values, sort_keys=True, separators=(",", ":"))
+            variant_id = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:16]
+        return self._base_key(target), variant_id, fields, vary_values
 
     def _cache_size(self):
         total = 0

@@ -58,6 +58,23 @@ class CacheStorageTests(unittest.IsolatedAsyncioTestCase):
         finally:
             Config.max_cache_bytes = old_budget
 
+    async def test_origin_vary_shape_change_invalidates_old_variants(self):
+        old_budget = Config.max_cache_bytes
+        Config.max_cache_bytes = 10000
+        try:
+            target = "https://example.com/changing-vary"
+            self.assertTrue(await self.server._write_cache(
+                target, b"english", {"Cache-Control": "max-age=60", "Vary": "Accept-Language"},
+                60, {"Accept-Language": "en"}))
+            self.assertTrue(await self.server._write_cache(
+                target, b"common", {"Cache-Control": "max-age=60"}, 60, {"Accept-Language": "en"}))
+            cached = await self.server._read_cache(target, {"Accept-Language": "en"})
+            self.assertEqual(cached[0], b"common")
+            base_key = self.server._base_key(target)
+            self.assertEqual(len(list(Config.cache_dir.glob(f"{base_key}-*.json"))), 0)
+        finally:
+            Config.max_cache_bytes = old_budget
+
     async def test_expired_entry_can_be_loaded_for_revalidation(self):
         target = "https://example.com/revalidate"
         self.assertTrue(await self.server._write_cache(target, b"cached", {"ETag": '"v1"'}, 1))

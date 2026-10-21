@@ -397,7 +397,7 @@ class CDNServer:
     def _etag_matches(condition, current, weak=True):
         if not condition:
             return False
-        tokens = re.findall(r'(?:W/)?"[^"]*"|\\*', condition)
+        tokens = re.findall(r'(?:W/)?"[^"]*"|\*', condition)
         if "*" in tokens:
             return True  # A cached representation exists.
         if not current:
@@ -461,7 +461,7 @@ class CDNServer:
             else:
                 if "," in range_value:
                     return None  # Multi-range responses are delegated to the origin.
-                match = re.fullmatch(r"bytes=(\\d*)-(\\d*)", range_value.strip(), re.IGNORECASE)
+                match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_value.strip(), re.IGNORECASE)
                 if not match or (not match.group(1) and not match.group(2)):
                     return None
                 first, last = match.groups()

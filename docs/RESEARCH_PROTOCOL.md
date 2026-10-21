@@ -14,6 +14,15 @@ Every candidate must be compared with at least:
 
 ## Synthetic benchmark
 
+Run the decentralized hint experiment:
+
+```bash
+python experiments/swarm_cache_simulation.py --requests 10000 --objects 100 --nodes 4 --sync-interval 100 --seed 2026
+```
+
+This compares independent fixed-TTL caches with cooperative aggregate-demand hints. It models control-plane overhead and never exchanges response payloads. It is a synthetic simulation, not evidence that real multi-node deployments will improve performance.
+
+
 Run:
 
 ```bash

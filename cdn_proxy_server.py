@@ -46,8 +46,9 @@ def validate_target(raw_url: str, allowed_hosts: frozenset[str]) -> str:
         raise web.HTTPBadRequest(text="Only absolute HTTP(S) URLs are supported")
     if parsed.username is not None or parsed.password is not None:
         raise web.HTTPBadRequest(text="Credentials in URLs are not allowed")
-    if port not in (None, 80, 443):
-        raise web.HTTPBadRequest(text="Non-standard ports are not allowed")
+    expected_port = 443 if parsed.scheme == "https" else 80
+    if port is not None and port != expected_port:
+        raise web.HTTPBadRequest(text="Only the default port for the selected scheme is allowed")
     if not allowed_hosts or hostname not in allowed_hosts:
         raise web.HTTPForbidden(text="Target host is not in CDN_ALLOWED_HOSTS")
     return parsed.geturl()

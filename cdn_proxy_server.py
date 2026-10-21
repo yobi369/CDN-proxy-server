@@ -249,35 +249,51 @@ class CDNServer:
         except OSError: pass
         return total
 
-    async def _read_cache(self, target):
-        body_path, meta_path = self._paths(target)
-        try:
-            meta = json.loads(await asyncio.to_thread(meta_path.read_text, encoding="utf-8"))
-            age = time.time() - float(meta["stored_at"])
-            if age < 0 or age >= int(meta["ttl"]): return None
-            body = await asyncio.to_thread(body_path.read_bytes)
-            return body, meta
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-            return None
+    async def _find_cache_entry(self, target, request_headers, fresh_only):
+        base_key = self._base_key(target)
+        request_values = self._request_header_values(request_headers)
+        for meta_path in Config.cache_dir.glob(f"{base_key}*.json"):
+            if not (meta_path.stem == base_key or meta_path.stem.startswith(base_key + "-")):
+                continue
+            try:
+                meta = json.loads(await asyncio.to_thread(meta_path.read_text, encoding="utf-8"))
+                stored_key = meta.get("target_key", base_key if meta_path.stem == base_key else None)
+                if stored_key != base_key:
+                    continue
+                fields = meta.get("vary", [])
+                values = meta.get("vary_values", {})
+                if any(request_values.get(field, "") != values.get(field, "") for field in fields):
+                    continue
+                age = time.time() - float(meta["stored_at"])
+                ttl = int(meta["ttl"])
+                if age < 0 or ttl <= 0:
+                    continue
+                if fresh_only and age >= ttl:
+                    continue
+                if not fresh_only and age < ttl:
+                    continue
+                body = await asyncio.to_thread(meta_path.with_suffix(".body").read_bytes)
+                return body, meta
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                continue
+        return None
 
-    async def _read_stale_cache(self, target):
-        """Read an expired but structurally valid entry for conditional revalidation."""
-        body_path, meta_path = self._paths(target)
-        try:
-            meta = json.loads(await asyncio.to_thread(meta_path.read_text, encoding="utf-8"))
-            age = time.time() - float(meta["stored_at"])
-            if age < 0 or int(meta["ttl"]) <= 0:
-                return None
-            body = await asyncio.to_thread(body_path.read_bytes)
-            return body, meta
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-            return None
+    async def _read_cache(self, target, request_headers=None):
+        return await self._find_cache_entry(target, request_headers, fresh_only=True)
+
+    async def _read_stale_cache(self, target, request_headers=None):
+        """Read a matching expired variant for conditional revalidation."""
+        return await self._find_cache_entry(target, request_headers, fresh_only=False)
 
     async def _delete_cache(self, target):
         async with self.cache_lock:
-            body_path, meta_path = self._paths(target)
-            existed = body_path.exists() or meta_path.exists()
-            for path in (body_path, meta_path):
+            base_key = self._base_key(target)
+            meta_paths = list(Config.cache_dir.glob(f"{base_key}*.json"))
+            body_paths = list(Config.cache_dir.glob(f"{base_key}*.body"))
+            temp_paths = list(Config.cache_dir.glob(f"{base_key}*.tmp"))
+            paths = meta_paths + body_paths + temp_paths
+            existed = any(path.exists() for path in paths)
+            for path in paths:
                 try:
                     await asyncio.to_thread(path.unlink, missing_ok=True)
                 except OSError:

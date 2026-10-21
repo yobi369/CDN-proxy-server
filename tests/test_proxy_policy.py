@@ -1,6 +1,6 @@
 import unittest
 from aiohttp import web
-from cdn_proxy_server import AdaptivePolicy, cache_policy, validate_target
+from cdn_proxy_server import AdaptivePolicy, cache_policy, request_may_use_cache, validate_target
 
 class TargetValidationTests(unittest.TestCase):
     def setUp(self):
@@ -22,6 +22,9 @@ class TargetValidationTests(unittest.TestCase):
     def test_rejects_nonstandard_port(self):
         with self.assertRaises(web.HTTPBadRequest):
             validate_target("https://example.com:8443/", self.allowed)
+    def test_rejects_wrong_default_port_for_scheme(self):
+        with self.assertRaises(web.HTTPBadRequest):
+            validate_target("https://example.com:80/", self.allowed)
     def test_empty_allowlist_fails_closed(self):
         with self.assertRaises(web.HTTPForbidden):
             validate_target("https://example.com/", frozenset())
@@ -35,12 +38,30 @@ class CachePolicyTests(unittest.TestCase):
         self.assertEqual(cache_policy({"Cache-Control": "no-cache"}, 300, 3600), 0)
     def test_set_cookie(self):
         self.assertEqual(cache_policy({"Set-Cookie": "session=abc"}, 300, 3600), 0)
+    def test_vary_response_is_not_cached_without_vary_aware_key(self):
+        self.assertEqual(cache_policy({"Vary": "Accept-Language", "Cache-Control": "max-age=60"}, 300, 3600), 0)
+    def test_lowercase_set_cookie_is_not_cached(self):
+        self.assertEqual(cache_policy({"set-cookie": "session=abc"}, 300, 3600), 0)
     def test_caps_ttl(self):
         self.assertEqual(cache_policy({"Cache-Control": "max-age=9000"}, 300, 3600), 3600)
     def test_origin_max_age(self):
         self.assertEqual(cache_policy({"Cache-Control": "public, max-age=120"}, 300, 3600), 120)
     def test_fallback_ttl(self):
         self.assertEqual(cache_policy({}, 300, 3600), 300)
+
+class RequestCacheSafetyTests(unittest.TestCase):
+    def test_authorized_request_bypasses_shared_cache(self):
+        request = type("Request", (), {"headers": {"Authorization": "Bearer private"}})()
+        self.assertFalse(request_may_use_cache(request))
+    def test_cookie_request_bypasses_shared_cache(self):
+        request = type("Request", (), {"headers": {"Cookie": "session=private"}})()
+        self.assertFalse(request_may_use_cache(request))
+    def test_no_cache_request_bypasses_shared_cache(self):
+        request = type("Request", (), {"headers": {"Cache-Control": "no-cache"}})()
+        self.assertFalse(request_may_use_cache(request))
+    def test_public_request_can_use_cache(self):
+        request = type("Request", (), {"headers": {}})()
+        self.assertTrue(request_may_use_cache(request))
 
 class AdaptivePolicyTests(unittest.TestCase):
     def test_never_extends_origin_ttl(self):
